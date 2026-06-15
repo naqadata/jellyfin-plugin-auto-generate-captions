@@ -165,6 +165,21 @@ public class AutoGenerateCaptionService
             cues = state.Cues.OrderBy(i => i.StartTicks).ToList();
         }
 
+        if (cues.Count == 0 && IsActiveGenerationStatus(state.Status))
+        {
+            long placeholderStartTicks = state.LastClientPositionTicks > 0
+                ? state.LastClientPositionTicks
+                : state.StartPositionTicks;
+            long placeholderEndTicks = placeholderStartTicks + TimeSpan.FromSeconds(5).Ticks;
+
+            builder.AppendLine("auto-caption-placeholder");
+            builder.Append(TicksToTimestamp(placeholderStartTicks));
+            builder.Append(" --> ");
+            builder.AppendLine(TicksToTimestamp(placeholderEndTicks));
+            builder.AppendLine("*** Generator spinning up - subtitles will start soon ***");
+            builder.AppendLine();
+        }
+
         foreach (CaptionCue cue in cues)
         {
             builder.AppendLine(cue.Id);
@@ -176,6 +191,12 @@ public class AutoGenerateCaptionService
         }
 
         return builder.ToString();
+    }
+
+    private static bool IsActiveGenerationStatus(string status)
+    {
+        return string.Equals(status, CaptionSessionStatuses.WarmingUp, StringComparison.Ordinal)
+            || string.Equals(status, CaptionSessionStatuses.Generating, StringComparison.Ordinal);
     }
 
     private static CaptionSessionDto ToDto(CaptionSessionState state)
