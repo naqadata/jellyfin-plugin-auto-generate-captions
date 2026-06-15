@@ -383,7 +383,7 @@ public class AutoGenerateCaptionService
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, int chunkSeconds, string audioPath)
     {
         string ffmpegPath = string.IsNullOrWhiteSpace(config.FfmpegPath) ? "ffmpeg" : config.FfmpegPath;
-        string requestedMap = state.AudioStreamIndex >= 0
+        string requestedMap = state.AudioStreamIndex > 0
             ? string.Create(CultureInfo.InvariantCulture, $"0:{state.AudioStreamIndex}")
             : "0:a:0";
         List<string> args = BuildFfmpegAudioExtractArgs(state.MediaPath!, requestedMap, startSeconds, chunkSeconds, audioPath);
