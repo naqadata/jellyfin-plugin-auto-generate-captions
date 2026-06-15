@@ -13,9 +13,14 @@ public class PluginConfiguration : BasePluginConfiguration
     public string FfmpegPath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the absolute path to the warm Whisper service or binary.
+    /// Gets or sets the absolute path to the Python executable that can import stable_whisper.
     /// </summary>
-    public string WhisperPath { get; set; } = string.Empty;
+    public string PythonPath { get; set; } = "python3";
+
+    /// <summary>
+    /// Gets or sets an optional external worker script path. Empty uses the bundled worker script.
+    /// </summary>
+    public string WorkerScriptPath { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the primary model path or model name.

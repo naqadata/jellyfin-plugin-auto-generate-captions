@@ -6,15 +6,15 @@ The goal is not to scan the whole library. A custom client starts a short-lived 
 
 ## Current State
 
-This first scaffold provides:
+This first implementation provides:
 
 - Plugin configuration page.
 - Session start/status/stop endpoints.
 - A live `.vtt` endpoint that returns valid WebVTT.
 - In-memory session state.
-- Clear TODO boundary for the ffmpeg/Whisper worker.
-
-It does not yet run ffmpeg or Whisper.
+- First-chunk ffmpeg audio extraction.
+- A bundled Python `stable_whisper` worker with backend/model logging.
+- Parsing generated WebVTT cues back into the live endpoint.
 
 ## API Contract
 

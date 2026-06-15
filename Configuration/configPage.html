@@ -15,9 +15,14 @@
                         <div class="fieldDescription">Optional absolute path. Leave empty to use the worker default.</div>
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="WhisperPath">Whisper path</label>
-                        <input id="WhisperPath" name="WhisperPath" type="text" is="emby-input" />
-                        <div class="fieldDescription">Path to the warm Whisper service or local transcription binary.</div>
+                        <label class="inputLabel inputLabelUnfocused" for="PythonPath">Python path</label>
+                        <input id="PythonPath" name="PythonPath" type="text" is="emby-input" />
+                        <div class="fieldDescription">Python executable that can import torch, whisper, and stable_whisper.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="WorkerScriptPath">Worker script path</label>
+                        <input id="WorkerScriptPath" name="WorkerScriptPath" type="text" is="emby-input" />
+                        <div class="fieldDescription">Optional external worker script. Leave empty to use the bundled script.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PrimaryModel">Primary model</label>
@@ -114,7 +119,8 @@
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId).then(function (config) {
                         document.querySelector('#FfmpegPath').value = config.FfmpegPath || '';
-                        document.querySelector('#WhisperPath').value = config.WhisperPath || '';
+                        document.querySelector('#PythonPath').value = config.PythonPath || 'python3';
+                        document.querySelector('#WorkerScriptPath').value = config.WorkerScriptPath || '';
                         document.querySelector('#PrimaryModel').value = config.PrimaryModel || 'large-v3';
                         document.querySelector('#FallbackModel').value = config.FallbackModel || 'medium';
                         document.querySelector('#PreferredBackend').value = config.PreferredBackend || 'cuda';
@@ -138,7 +144,8 @@
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId).then(function (config) {
                         config.FfmpegPath = document.querySelector('#FfmpegPath').value.trim();
-                        config.WhisperPath = document.querySelector('#WhisperPath').value.trim();
+                        config.PythonPath = document.querySelector('#PythonPath').value.trim() || 'python3';
+                        config.WorkerScriptPath = document.querySelector('#WorkerScriptPath').value.trim();
                         config.PrimaryModel = document.querySelector('#PrimaryModel').value.trim() || 'large-v3';
                         config.FallbackModel = document.querySelector('#FallbackModel').value.trim() || 'medium';
                         config.PreferredBackend = document.querySelector('#PreferredBackend').value.trim() || 'cuda';

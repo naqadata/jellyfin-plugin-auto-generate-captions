@@ -1,8 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text;
 using Jellyfin.Plugin.AutoGenerateCaptions.Configuration;
 using Jellyfin.Plugin.AutoGenerateCaptions.Models;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
@@ -16,15 +20,19 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
+    private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
+    private readonly IApplicationPaths _applicationPaths;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoGenerateCaptionService"/> class.
     /// </summary>
+    /// <param name="applicationPaths">Application paths.</param>
     /// <param name="logger">Logger.</param>
-    public AutoGenerateCaptionService(ILogger<AutoGenerateCaptionService> logger)
+    public AutoGenerateCaptionService(IApplicationPaths applicationPaths, ILogger<AutoGenerateCaptionService> logger)
     {
+        _applicationPaths = applicationPaths;
         _logger = logger;
     }
 
@@ -58,7 +66,7 @@ public class AutoGenerateCaptionService
             PollSeconds = Math.Clamp(config.PollSeconds, 1, 30),
             StartPositionTicks = Math.Max(0, request.PositionTicks),
             GeneratedThroughTicks = Math.Max(0, request.PositionTicks),
-            Message = "Session created. Worker implementation is not wired yet."
+            Message = "Session created. Preparing first caption chunk."
         };
 
         _sessions[sessionId] = state;
@@ -91,15 +99,7 @@ public class AutoGenerateCaptionService
                 sessionId);
         }
 
-        // TODO: Attach the ffmpeg/Whisper worker here. It should update Ranges,
-        // GeneratedThroughTicks, Cues, Status, and Message as chunks complete.
-        // Required worker log points:
-        // - backend probe start/result: requested backend, selected backend, GPU name, VRAM, driver/runtime version when available
-        // - model selection: primary/fallback, model path, quantization, language
-        // - model load/warm timings and whether the model stayed resident
-        // - ffmpeg command, seek position, stream index, startup/extraction timings
-        // - per-chunk inference timings, realtime factor, generated range, cache write path
-        // - fallback decisions and CPU/GPU transitions
+        _ = Task.Run(() => GenerateFirstChunkAsync(state, config));
         return ToDto(state);
     }
 
@@ -128,6 +128,7 @@ public class AutoGenerateCaptionService
         state.Status = CaptionSessionStatuses.Stopped;
         state.Message = "Session stopped by client.";
         state.StoppedAt = DateTimeOffset.UtcNow;
+        state.Cancellation.Cancel();
         _logger.LogInformation("Stopped auto-caption session {SessionId}", sessionId);
         return ToStatusDto(state);
     }
@@ -158,7 +159,13 @@ public class AutoGenerateCaptionService
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"NOTE generatedThroughTicks={state.GeneratedThroughTicks}"));
         builder.AppendLine();
 
-        foreach (CaptionCue cue in state.Cues.OrderBy(i => i.StartTicks))
+        List<CaptionCue> cues;
+        lock (state.SyncRoot)
+        {
+            cues = state.Cues.OrderBy(i => i.StartTicks).ToList();
+        }
+
+        foreach (CaptionCue cue in cues)
         {
             builder.AppendLine(cue.Id);
             builder.Append(TicksToTimestamp(cue.StartTicks));
@@ -191,6 +198,12 @@ public class AutoGenerateCaptionService
     private static CaptionSessionStatusDto ToStatusDto(CaptionSessionState state)
     {
         CaptionSessionDto dto = ToDto(state);
+        IReadOnlyList<CaptionCacheRangeDto> ranges;
+        lock (state.SyncRoot)
+        {
+            ranges = state.Ranges.ToArray();
+        }
+
         return new CaptionSessionStatusDto
         {
             SessionId = dto.SessionId,
@@ -203,9 +216,366 @@ public class AutoGenerateCaptionService
             PollSeconds = dto.PollSeconds,
             GeneratedThroughTicks = dto.GeneratedThroughTicks,
             HasCachedCaptions = dto.HasCachedCaptions,
-            Ranges = state.Ranges.ToArray(),
+            Ranges = ranges,
             Message = state.Message
         };
+    }
+
+    private async Task GenerateFirstChunkAsync(CaptionSessionState state, PluginConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(state.MediaPath) || !File.Exists(state.MediaPath))
+        {
+            FailSession(state, string.Create(CultureInfo.InvariantCulture, $"Media path is missing or unreadable: {state.MediaPath}"));
+            return;
+        }
+
+        string cacheRoot = GetCacheRoot(config);
+        string sessionDirectory = Path.Combine(cacheRoot, "sessions", state.SessionId.ToString("N"));
+        Directory.CreateDirectory(sessionDirectory);
+
+        string workerScriptPath;
+        try
+        {
+            workerScriptPath = EnsureWorkerScript(config, cacheRoot);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Auto-caption worker script extraction failed for session {SessionId}", state.SessionId);
+            FailSession(state, ex.Message);
+            return;
+        }
+
+        double startSeconds = Math.Max(0, (state.StartPositionTicks / (double)TicksPerSecond) - 2);
+        int chunkSeconds = Math.Clamp(config.InitialChunkSeconds, 3, 60);
+        string audioPath = Path.Combine(sessionDirectory, "chunk-000.wav");
+        string vttPath = Path.Combine(sessionDirectory, "chunk-000.vtt");
+
+        state.Status = CaptionSessionStatuses.Generating;
+        state.Message = "Extracting first audio chunk.";
+
+        try
+        {
+            await ExtractAudioChunkAsync(state, config, startSeconds, chunkSeconds, audioPath).ConfigureAwait(false);
+
+            if (state.Cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            state.Message = "Transcribing first audio chunk.";
+            await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
+
+            if (state.Cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            IReadOnlyList<CaptionCue> cues = ParseVtt(vttPath);
+            lock (state.SyncRoot)
+            {
+                state.Cues.AddRange(cues);
+                state.Ranges.Add(new CaptionCacheRangeDto
+                {
+                    StartTicks = TimeSpan.FromSeconds(startSeconds).Ticks,
+                    EndTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks
+                });
+            }
+
+            state.GeneratedThroughTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks;
+            state.Status = CaptionSessionStatuses.Generating;
+            state.Message = cues.Count > 0
+                ? string.Create(CultureInfo.InvariantCulture, $"Generated {cues.Count} cues for first chunk.")
+                : "Worker completed but produced no cues for the first chunk.";
+
+            _logger.LogInformation(
+                "Auto-caption first chunk complete for session {SessionId}: cues={CueCount}; generatedThroughTicks={GeneratedThroughTicks}; vtt={VttPath}",
+                state.SessionId,
+                cues.Count,
+                state.GeneratedThroughTicks,
+                vttPath);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Auto-caption first chunk cancelled for session {SessionId}", state.SessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Auto-caption first chunk failed for session {SessionId}", state.SessionId);
+            FailSession(state, ex.Message);
+        }
+    }
+
+    private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, int chunkSeconds, string audioPath)
+    {
+        string ffmpegPath = string.IsNullOrWhiteSpace(config.FfmpegPath) ? "ffmpeg" : config.FfmpegPath;
+        var args = new List<string>
+        {
+            "-hide_banner",
+            "-y",
+            "-ss",
+            startSeconds.ToString("0.###", CultureInfo.InvariantCulture),
+            "-t",
+            chunkSeconds.ToString(CultureInfo.InvariantCulture),
+            "-i",
+            state.MediaPath!,
+            "-vn",
+            "-map",
+            string.Create(CultureInfo.InvariantCulture, $"0:{state.AudioStreamIndex}"),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            audioPath
+        };
+
+        _logger.LogInformation(
+            "Auto-caption ffmpeg extraction start for session {SessionId}: ffmpeg={FfmpegPath}; media={MediaPath}; audioStreamIndex={AudioStreamIndex}; startSeconds={StartSeconds}; chunkSeconds={ChunkSeconds}; output={AudioPath}",
+            state.SessionId,
+            ffmpegPath,
+            state.MediaPath,
+            state.AudioStreamIndex,
+            startSeconds,
+            chunkSeconds,
+            audioPath);
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        ProcessResult result = await RunProcessAsync(ffmpegPath, args, state.Cancellation.Token).ConfigureAwait(false);
+        stopwatch.Stop();
+
+        LogProcessOutput(state.SessionId, "ffmpeg", result);
+        _logger.LogInformation(
+            "Auto-caption ffmpeg extraction complete for session {SessionId}: exitCode={ExitCode}; elapsedMs={ElapsedMs}; outputBytes={OutputBytes}",
+            state.SessionId,
+            result.ExitCode,
+            stopwatch.ElapsedMilliseconds,
+            File.Exists(audioPath) ? new FileInfo(audioPath).Length : 0);
+
+        if (result.ExitCode != 0 || !File.Exists(audioPath))
+        {
+            throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture, $"ffmpeg extraction failed with exit code {result.ExitCode}"));
+        }
+    }
+
+    private async Task RunWhisperWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
+    {
+        string pythonPath = string.IsNullOrWhiteSpace(config.PythonPath) ? "python3" : config.PythonPath;
+        var args = new List<string>
+        {
+            workerScriptPath,
+            "--audio",
+            audioPath,
+            "--output",
+            vttPath,
+            "--model",
+            config.PrimaryModel,
+            "--fallback-model",
+            config.FallbackModel,
+            "--language",
+            state.Language,
+            "--backend",
+            config.PreferredBackend,
+            "--offset-seconds",
+            startSeconds.ToString("0.###", CultureInfo.InvariantCulture)
+        };
+
+        if (config.AllowCpuFallback)
+        {
+            args.Add("--allow-cpu-fallback");
+        }
+
+        _logger.LogInformation(
+            "Auto-caption whisper worker start for session {SessionId}: python={PythonPath}; script={WorkerScriptPath}; model={Model}; fallbackModel={FallbackModel}; backend={Backend}; audio={AudioPath}; output={VttPath}",
+            state.SessionId,
+            pythonPath,
+            workerScriptPath,
+            config.PrimaryModel,
+            config.FallbackModel,
+            config.PreferredBackend,
+            audioPath,
+            vttPath);
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        ProcessResult result = await RunProcessAsync(pythonPath, args, state.Cancellation.Token).ConfigureAwait(false);
+        stopwatch.Stop();
+        LogProcessOutput(state.SessionId, "whisper", result);
+        _logger.LogInformation(
+            "Auto-caption whisper worker complete for session {SessionId}: exitCode={ExitCode}; elapsedMs={ElapsedMs}; vttBytes={VttBytes}",
+            state.SessionId,
+            result.ExitCode,
+            stopwatch.ElapsedMilliseconds,
+            File.Exists(vttPath) ? new FileInfo(vttPath).Length : 0);
+
+        if (result.ExitCode != 0 || !File.Exists(vttPath))
+        {
+            throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture, $"Whisper worker failed with exit code {result.ExitCode}"));
+        }
+    }
+
+    private string GetCacheRoot(PluginConfiguration config)
+    {
+        string configured = config.CacheDirectory;
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            Directory.CreateDirectory(configured);
+            return configured;
+        }
+
+        string fallback = Path.Combine(_applicationPaths.DataPath, "auto-generate-captions");
+        Directory.CreateDirectory(fallback);
+        return fallback;
+    }
+
+    private static string EnsureWorkerScript(PluginConfiguration config, string cacheRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(config.WorkerScriptPath))
+        {
+            return config.WorkerScriptPath;
+        }
+
+        string scriptPath = Path.Combine(cacheRoot, "workers", "whisper_chunk.py");
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+
+        Assembly assembly = typeof(AutoGenerateCaptionService).Assembly;
+        string resourceName = assembly
+            .GetManifestResourceNames()
+            .First(i => i.EndsWith("Workers.whisper_chunk.py", StringComparison.Ordinal));
+
+        using Stream resource = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("Bundled whisper worker resource not found.");
+        using FileStream file = File.Create(scriptPath);
+        resource.CopyTo(file);
+        return scriptPath;
+    }
+
+    private static async Task<ProcessResult> RunProcessAsync(string fileName, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        var output = new StringBuilder();
+        var error = new StringBuilder();
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            },
+            EnableRaisingEvents = true
+        };
+
+        foreach (string argument in arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                output.AppendLine(e.Data);
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                error.AppendLine(e.Data);
+            }
+        };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            throw;
+        }
+
+        return new ProcessResult(process.ExitCode, output.ToString(), error.ToString());
+    }
+
+    private void LogProcessOutput(Guid sessionId, string name, ProcessResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            foreach (string line in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                _logger.LogInformation("Auto-caption {ProcessName} stdout for session {SessionId}: {Line}", name, sessionId, line);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.StandardError))
+        {
+            foreach (string line in result.StandardError.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                _logger.LogWarning("Auto-caption {ProcessName} stderr for session {SessionId}: {Line}", name, sessionId, line);
+            }
+        }
+    }
+
+    private static IReadOnlyList<CaptionCue> ParseVtt(string vttPath)
+    {
+        var cues = new List<CaptionCue>();
+        string[] lines = File.ReadAllLines(vttPath);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Match match = TimestampRegex.Match(lines[i]);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            string id = i > 0 && !string.IsNullOrWhiteSpace(lines[i - 1]) ? lines[i - 1].Trim() : string.Create(CultureInfo.InvariantCulture, $"cue-{cues.Count}");
+            var textLines = new List<string>();
+            for (int j = i + 1; j < lines.Length && !string.IsNullOrWhiteSpace(lines[j]); j++)
+            {
+                textLines.Add(lines[j].Trim());
+            }
+
+            if (textLines.Count == 0)
+            {
+                continue;
+            }
+
+            cues.Add(new CaptionCue(
+                id,
+                TimestampToTicks(match.Groups["start"].Value),
+                TimestampToTicks(match.Groups["end"].Value),
+                string.Join('\n', textLines)));
+        }
+
+        return cues;
+    }
+
+    private static long TimestampToTicks(string timestamp)
+    {
+        string[] parts = timestamp.Split([':', '.']);
+        int hours = int.Parse(parts[0], CultureInfo.InvariantCulture);
+        int minutes = int.Parse(parts[1], CultureInfo.InvariantCulture);
+        int seconds = int.Parse(parts[2], CultureInfo.InvariantCulture);
+        int milliseconds = int.Parse(parts[3], CultureInfo.InvariantCulture);
+        return TimeSpan.FromHours(hours).Ticks
+            + TimeSpan.FromMinutes(minutes).Ticks
+            + TimeSpan.FromSeconds(seconds).Ticks
+            + TimeSpan.FromMilliseconds(milliseconds).Ticks;
+    }
+
+    private static void FailSession(CaptionSessionState state, string message)
+    {
+        state.Status = CaptionSessionStatuses.Failed;
+        state.Message = message;
     }
 
     private static string GetDisplayName(Video video)
@@ -261,7 +631,13 @@ public class AutoGenerateCaptionService
         public List<CaptionCacheRangeDto> Ranges { get; } = [];
 
         public List<CaptionCue> Cues { get; } = [];
+
+        public object SyncRoot { get; } = new();
+
+        public CancellationTokenSource Cancellation { get; } = new();
     }
 
     private sealed record CaptionCue(string Id, long StartTicks, long EndTicks, string Text);
+
+    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 }
