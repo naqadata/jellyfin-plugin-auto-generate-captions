@@ -308,34 +308,18 @@ public class AutoGenerateCaptionService
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, int chunkSeconds, string audioPath)
     {
         string ffmpegPath = string.IsNullOrWhiteSpace(config.FfmpegPath) ? "ffmpeg" : config.FfmpegPath;
-        var args = new List<string>
-        {
-            "-hide_banner",
-            "-y",
-            "-ss",
-            startSeconds.ToString("0.###", CultureInfo.InvariantCulture),
-            "-t",
-            chunkSeconds.ToString(CultureInfo.InvariantCulture),
-            "-i",
-            state.MediaPath!,
-            "-vn",
-            "-map",
-            string.Create(CultureInfo.InvariantCulture, $"0:{state.AudioStreamIndex}"),
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-f",
-            "wav",
-            audioPath
-        };
+        string requestedMap = state.AudioStreamIndex >= 0
+            ? string.Create(CultureInfo.InvariantCulture, $"0:{state.AudioStreamIndex}")
+            : "0:a:0";
+        List<string> args = BuildFfmpegAudioExtractArgs(state.MediaPath!, requestedMap, startSeconds, chunkSeconds, audioPath);
 
         _logger.LogInformation(
-            "Auto-caption ffmpeg extraction start for session {SessionId}: ffmpeg={FfmpegPath}; media={MediaPath}; audioStreamIndex={AudioStreamIndex}; startSeconds={StartSeconds}; chunkSeconds={ChunkSeconds}; output={AudioPath}",
+            "Auto-caption ffmpeg extraction start for session {SessionId}: ffmpeg={FfmpegPath}; media={MediaPath}; audioStreamIndex={AudioStreamIndex}; map={StreamMap}; startSeconds={StartSeconds}; chunkSeconds={ChunkSeconds}; output={AudioPath}",
             state.SessionId,
             ffmpegPath,
             state.MediaPath,
             state.AudioStreamIndex,
+            requestedMap,
             startSeconds,
             chunkSeconds,
             audioPath);
@@ -354,8 +338,66 @@ public class AutoGenerateCaptionService
 
         if (result.ExitCode != 0 || !File.Exists(audioPath))
         {
+            string fallbackMap = "0:a:0";
+            if (!string.Equals(requestedMap, fallbackMap, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Auto-caption ffmpeg requested stream map failed for session {SessionId}: requestedMap={RequestedMap}; exitCode={ExitCode}. Retrying with fallbackMap={FallbackMap}",
+                    state.SessionId,
+                    requestedMap,
+                    result.ExitCode,
+                    fallbackMap);
+
+                if (File.Exists(audioPath))
+                {
+                    File.Delete(audioPath);
+                }
+
+                args = BuildFfmpegAudioExtractArgs(state.MediaPath!, fallbackMap, startSeconds, chunkSeconds, audioPath);
+                stopwatch.Restart();
+                result = await RunProcessAsync(ffmpegPath, args, state.Cancellation.Token).ConfigureAwait(false);
+                stopwatch.Stop();
+
+                LogProcessOutput(state.SessionId, "ffmpeg-fallback", result);
+                _logger.LogInformation(
+                    "Auto-caption ffmpeg fallback extraction complete for session {SessionId}: fallbackMap={FallbackMap}; exitCode={ExitCode}; elapsedMs={ElapsedMs}; outputBytes={OutputBytes}",
+                    state.SessionId,
+                    fallbackMap,
+                    result.ExitCode,
+                    stopwatch.ElapsedMilliseconds,
+                    File.Exists(audioPath) ? new FileInfo(audioPath).Length : 0);
+            }
+        }
+
+        if (result.ExitCode != 0 || !File.Exists(audioPath))
+        {
             throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture, $"ffmpeg extraction failed with exit code {result.ExitCode}"));
         }
+    }
+
+    private static List<string> BuildFfmpegAudioExtractArgs(string mediaPath, string streamMap, double startSeconds, int chunkSeconds, string audioPath)
+    {
+        return
+        [
+            "-hide_banner",
+            "-y",
+            "-ss",
+            startSeconds.ToString("0.###", CultureInfo.InvariantCulture),
+            "-t",
+            chunkSeconds.ToString(CultureInfo.InvariantCulture),
+            "-i",
+            mediaPath,
+            "-vn",
+            "-map",
+            streamMap,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            audioPath
+        ];
     }
 
     private async Task RunWhisperWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
