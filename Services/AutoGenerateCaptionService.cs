@@ -245,7 +245,7 @@ public class AutoGenerateCaptionService
             return;
         }
 
-        double startSeconds = Math.Max(0, (state.StartPositionTicks / (double)TicksPerSecond) - 2);
+        double startSeconds = Math.Max(0, (state.StartPositionTicks / (double)TicksPerSecond) + 8);
         int chunkSeconds = Math.Clamp(config.InitialChunkSeconds, 3, 60);
         string audioPath = Path.Combine(sessionDirectory, "chunk-000.wav");
         string vttPath = Path.Combine(sessionDirectory, "chunk-000.vtt");

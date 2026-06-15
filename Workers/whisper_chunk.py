@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import gc
 import json
+import os
 import sys
 import time
 import traceback
 from datetime import timedelta
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def log(event, **fields):
@@ -35,6 +39,16 @@ def write_vtt(path, segments, offset_seconds):
             output.write(f"{format_timestamp(start)} --> {format_timestamp(end)}\n")
             output.write(text)
             output.write("\n\n")
+
+
+def clear_cuda(torch):
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
 
 def main():
@@ -108,6 +122,7 @@ def main():
                 }
                 load_failures.append(failure)
                 log("model-load-failed", **failure)
+                clear_cuda(torch)
 
         if model is None:
             raise RuntimeError(f"all model load candidates failed: {load_failures!r}")
@@ -116,13 +131,32 @@ def main():
 
         transcribe_started = time.monotonic()
         language = None if args.language.lower() == "auto" else args.language
-        result = model.transcribe(
-            args.audio,
-            verbose=False,
-            language=language,
-            vad=True,
-            vad_threshold=args.vad_threshold,
-        )
+        try:
+            result = model.transcribe(
+                args.audio,
+                verbose=False,
+                language=language,
+                vad=True,
+                vad_threshold=args.vad_threshold,
+            )
+        except Exception as exc:
+            log("transcribe-failed", model=selected_model, device=selected_device, errorType=type(exc).__name__, error=repr(exc))
+            if selected_device != "cuda" or not args.allow_cpu_fallback:
+                raise
+
+            del model
+            clear_cuda(torch)
+            selected_model = args.fallback_model or args.model
+            selected_device = "cpu"
+            log("model-fallback", model=selected_model, device=selected_device, reason=type(exc).__name__)
+            model = stable_whisper.load_model(selected_model, device=selected_device, in_memory=True)
+            result = model.transcribe(
+                args.audio,
+                verbose=False,
+                language=language,
+                vad=True,
+                vad_threshold=args.vad_threshold,
+            )
 
         segments = list(getattr(result, "segments", []))
         transcribe_elapsed = time.monotonic() - transcribe_started
