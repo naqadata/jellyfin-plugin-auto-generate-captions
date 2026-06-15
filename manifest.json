@@ -12,7 +12,7 @@
         "changelog": "Initial API, configuration, and live WebVTT session scaffold.",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.0.zip",
-        "checksum": "be8db5c6a9bba478bfac75bc51f35d83",
+        "checksum": "b03e61fd9ad1b858368a848aaed49737",
         "timestamp": "2026-06-14T00:00:00Z"
       }
     ]

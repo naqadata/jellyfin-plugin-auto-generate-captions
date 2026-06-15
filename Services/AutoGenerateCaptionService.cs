@@ -23,16 +23,22 @@ public class AutoGenerateCaptionService
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
     private readonly IApplicationPaths _applicationPaths;
+    private readonly ResidentWhisperWorker _residentWhisperWorker;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoGenerateCaptionService"/> class.
     /// </summary>
     /// <param name="applicationPaths">Application paths.</param>
+    /// <param name="residentWhisperWorker">Resident Whisper worker.</param>
     /// <param name="logger">Logger.</param>
-    public AutoGenerateCaptionService(IApplicationPaths applicationPaths, ILogger<AutoGenerateCaptionService> logger)
+    public AutoGenerateCaptionService(
+        IApplicationPaths applicationPaths,
+        ResidentWhisperWorker residentWhisperWorker,
+        ILogger<AutoGenerateCaptionService> logger)
     {
         _applicationPaths = applicationPaths;
+        _residentWhisperWorker = residentWhisperWorker;
         _logger = logger;
     }
 
@@ -498,6 +504,44 @@ public class AutoGenerateCaptionService
 
     private async Task RunWhisperWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
     {
+        try
+        {
+            Stopwatch residentStopwatch = Stopwatch.StartNew();
+            ResidentWhisperWorker.WorkerResponse response = await _residentWhisperWorker.TranscribeAsync(
+                config,
+                audioPath,
+                vttPath,
+                startSeconds,
+                state.Language,
+                state.Cancellation.Token).ConfigureAwait(false);
+            residentStopwatch.Stop();
+
+            _logger.LogInformation(
+                "Auto-caption resident whisper worker complete for session {SessionId}: model={Model}; device={Device}; segments={SegmentCount}; workerElapsedSeconds={WorkerElapsedSeconds}; elapsedMs={ElapsedMs}; vttBytes={VttBytes}",
+                state.SessionId,
+                response.Model,
+                response.Device,
+                response.SegmentCount,
+                response.ElapsedSeconds,
+                residentStopwatch.ElapsedMilliseconds,
+                File.Exists(vttPath) ? new FileInfo(vttPath).Length : 0);
+
+            if (!File.Exists(vttPath))
+            {
+                throw new InvalidOperationException("Resident Whisper worker completed without writing VTT output.");
+            }
+
+            return;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Auto-caption resident whisper worker failed for session {SessionId}; falling back to per-chunk process.", state.SessionId);
+        }
+
         string pythonPath = string.IsNullOrWhiteSpace(config.PythonPath) ? "python3" : config.PythonPath;
         var args = new List<string>
         {

@@ -13,6 +13,8 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
+        serviceCollection.AddSingleton<ResidentWhisperWorker>();
+        serviceCollection.AddHostedService(provider => provider.GetRequiredService<ResidentWhisperWorker>());
         serviceCollection.AddSingleton<AutoGenerateCaptionService>();
     }
 }
