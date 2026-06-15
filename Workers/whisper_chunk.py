@@ -26,19 +26,38 @@ def format_timestamp(seconds):
     return f"{hours:02}:{minutes:02}:{whole_seconds:02}.{milliseconds:03}"
 
 
-def write_vtt(path, segments, offset_seconds):
+def write_vtt(path, segments, offset_seconds, start_padding, end_padding, min_duration):
+    cues = []
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+
+        raw_start = offset_seconds + float(segment.start)
+        raw_end = offset_seconds + float(segment.end)
+        start = max(0.0, raw_start - start_padding)
+        end = max(raw_end + end_padding, start + min_duration)
+        cues.append({
+            "start": start,
+            "end": end,
+            "text": text,
+        })
+
+    for index, cue in enumerate(cues):
+        if index >= len(cues) - 1:
+            continue
+
+        next_start = cues[index + 1]["start"]
+        max_end = next_start - 0.02
+        if cue["end"] > max_end:
+            cue["end"] = max(cue["start"] + 0.2, max_end)
+
     with open(path, "w", encoding="utf-8") as output:
         output.write("WEBVTT\n\n")
-        for index, segment in enumerate(segments):
-            start = offset_seconds + float(segment.start)
-            end = offset_seconds + float(segment.end)
-            text = segment.text.strip()
-            if not text:
-                continue
-
+        for index, cue in enumerate(cues):
             output.write(f"chunk-{index}\n")
-            output.write(f"{format_timestamp(start)} --> {format_timestamp(end)}\n")
-            output.write(text)
+            output.write(f"{format_timestamp(cue['start'])} --> {format_timestamp(cue['end'])}\n")
+            output.write(cue["text"])
             output.write("\n\n")
 
 
@@ -150,7 +169,7 @@ def transcribe_audio(args, model, selected_model, selected_device, torch, stable
     transcribe_elapsed = time.monotonic() - transcribe_started
     log("transcribe-complete", stream=log_stream, segmentCount=len(segments), elapsedSeconds=transcribe_elapsed)
 
-    write_vtt(output, segments, offset_seconds)
+    write_vtt(output, segments, offset_seconds, args.cue_start_padding, args.cue_end_padding, args.cue_min_duration)
     return model, selected_model, selected_device, len(segments)
 
 
@@ -266,6 +285,9 @@ def main():
     parser.add_argument("--allow-cpu-fallback", action="store_true")
     parser.add_argument("--offset-seconds", type=float, default=0.0)
     parser.add_argument("--vad-threshold", type=float, default=0.35)
+    parser.add_argument("--cue-start-padding", type=float, default=0.05)
+    parser.add_argument("--cue-end-padding", type=float, default=0.5)
+    parser.add_argument("--cue-min-duration", type=float, default=1.1)
     args = parser.parse_args()
 
     started = time.monotonic()
