@@ -539,6 +539,11 @@ public class AutoGenerateCaptionService
         }
         catch (Exception ex)
         {
+            if (state.Cancellation.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(state.Cancellation.Token);
+            }
+
             _logger.LogWarning(ex, "Auto-caption resident whisper worker failed for session {SessionId}; falling back to per-chunk process.", state.SessionId);
         }
 

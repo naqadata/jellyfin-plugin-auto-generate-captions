@@ -111,7 +111,7 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
             await process.StandardInput.FlushAsync().ConfigureAwait(false);
 
             await using CancellationTokenRegistration registration = cancellationToken.Register(
-                () => responseSource.TrySetCanceled(cancellationToken));
+                () => CancelActiveJob(requestId, responseSource, cancellationToken));
             return await responseSource.Task.ConfigureAwait(false);
         }
         finally
@@ -260,6 +260,28 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
         }
     }
 
+    private void CancelActiveJob(string requestId, TaskCompletionSource<WorkerResponse> responseSource, CancellationToken cancellationToken)
+    {
+        Process? processToStop = null;
+        lock (_syncRoot)
+        {
+            if (!string.Equals(_pendingResponseId, requestId, StringComparison.Ordinal))
+            {
+                responseSource.TrySetCanceled(cancellationToken);
+                return;
+            }
+
+            processToStop = _process;
+            _process = null;
+            _pendingResponseId = null;
+            _pendingResponse = null;
+        }
+
+        _logger.LogInformation("Auto-caption resident worker active job {RequestId} cancelled; stopping worker process to interrupt transcription.", requestId);
+        StopProcess(processToStop);
+        responseSource.TrySetCanceled(cancellationToken);
+    }
+
     private string GetCacheRoot(PluginConfiguration config)
     {
         string configured = config.CacheDirectory;
@@ -300,6 +322,11 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
     {
         Process? process = _process;
         _process = null;
+        StopProcess(process);
+    }
+
+    private void StopProcess(Process? process)
+    {
         if (process is null)
         {
             return;
