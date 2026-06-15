@@ -66,7 +66,7 @@ public class AutoGenerateCaptionService
             PollSeconds = Math.Clamp(config.PollSeconds, 1, 30),
             StartPositionTicks = Math.Max(0, request.PositionTicks),
             GeneratedThroughTicks = Math.Max(0, request.PositionTicks),
-            Message = "Session created. Preparing first caption chunk."
+            Message = "Session created. Preparing caption generation."
         };
 
         _sessions[sessionId] = state;
@@ -99,7 +99,7 @@ public class AutoGenerateCaptionService
                 sessionId);
         }
 
-        _ = Task.Run(() => GenerateFirstChunkAsync(state, config));
+        _ = Task.Run(() => GenerateSessionAsync(state, config));
         return ToDto(state);
     }
 
@@ -221,7 +221,7 @@ public class AutoGenerateCaptionService
         };
     }
 
-    private async Task GenerateFirstChunkAsync(CaptionSessionState state, PluginConfiguration config)
+    private async Task GenerateSessionAsync(CaptionSessionState state, PluginConfiguration config)
     {
         if (string.IsNullOrWhiteSpace(state.MediaPath) || !File.Exists(state.MediaPath))
         {
@@ -245,64 +245,139 @@ public class AutoGenerateCaptionService
             return;
         }
 
-        double startSeconds = Math.Max(0, (state.StartPositionTicks / (double)TicksPerSecond) + 8);
-        int chunkSeconds = Math.Clamp(config.InitialChunkSeconds, 3, 60);
-        string audioPath = Path.Combine(sessionDirectory, "chunk-000.wav");
-        string vttPath = Path.Combine(sessionDirectory, "chunk-000.vtt");
-
         state.Status = CaptionSessionStatuses.Generating;
-        state.Message = "Extracting first audio chunk.";
+        state.Message = "Starting caption generation loop.";
+        state.LastClientPositionTicks = state.StartPositionTicks;
+
+        double nextStartSeconds = Math.Max(0, (state.StartPositionTicks / (double)TicksPerSecond) + 8);
+        int initialChunkSeconds = Math.Clamp(config.InitialChunkSeconds, 3, 60);
+        int steadyChunkSeconds = Math.Clamp(config.ChunkSeconds, 5, 120);
+        int lookaheadSeconds = Math.Clamp(config.LookaheadSeconds, steadyChunkSeconds, 300);
+        int idleDelaySeconds = Math.Clamp(config.PollSeconds, 1, 10);
+        int chunkIndex = 0;
+
+        _logger.LogInformation(
+            "Auto-caption generation loop start for session {SessionId}: nextStartSeconds={NextStartSeconds}; initialChunkSeconds={InitialChunkSeconds}; steadyChunkSeconds={SteadyChunkSeconds}; lookaheadSeconds={LookaheadSeconds}; idleDelaySeconds={IdleDelaySeconds}",
+            state.SessionId,
+            nextStartSeconds,
+            initialChunkSeconds,
+            steadyChunkSeconds,
+            lookaheadSeconds,
+            idleDelaySeconds);
 
         try
         {
-            await ExtractAudioChunkAsync(state, config, startSeconds, chunkSeconds, audioPath).ConfigureAwait(false);
-
-            if (state.Cancellation.IsCancellationRequested)
+            while (!state.Cancellation.IsCancellationRequested)
             {
-                return;
-            }
-
-            state.Message = "Transcribing first audio chunk.";
-            await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
-
-            if (state.Cancellation.IsCancellationRequested)
-            {
-                return;
-            }
-
-            IReadOnlyList<CaptionCue> cues = ParseVtt(vttPath);
-            lock (state.SyncRoot)
-            {
-                state.Cues.AddRange(cues);
-                state.Ranges.Add(new CaptionCacheRangeDto
+                long targetTicks = state.LastClientPositionTicks + TimeSpan.FromSeconds(lookaheadSeconds).Ticks;
+                long nextStartTicks = TimeSpan.FromSeconds(nextStartSeconds).Ticks;
+                if (state.GeneratedThroughTicks >= targetTicks && nextStartTicks >= targetTicks)
                 {
-                    StartTicks = TimeSpan.FromSeconds(startSeconds).Ticks,
-                    EndTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks
-                });
+                    state.Message = string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Caption generation is {TicksToSeconds(state.GeneratedThroughTicks - state.LastClientPositionTicks):0.#}s ahead of playback.");
+                    await Task.Delay(TimeSpan.FromSeconds(idleDelaySeconds), state.Cancellation.Token).ConfigureAwait(false);
+                    continue;
+                }
+
+                int chunkSeconds = chunkIndex == 0 ? initialChunkSeconds : steadyChunkSeconds;
+                string chunkName = string.Create(CultureInfo.InvariantCulture, $"chunk-{chunkIndex:000}");
+                string audioPath = Path.Combine(sessionDirectory, chunkName + ".wav");
+                string vttPath = Path.Combine(sessionDirectory, chunkName + ".vtt");
+
+                await GenerateChunkAsync(
+                    state,
+                    config,
+                    workerScriptPath,
+                    chunkIndex,
+                    nextStartSeconds,
+                    chunkSeconds,
+                    audioPath,
+                    vttPath).ConfigureAwait(false);
+
+                nextStartSeconds += chunkSeconds;
+                chunkIndex++;
             }
-
-            state.GeneratedThroughTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks;
-            state.Status = CaptionSessionStatuses.Generating;
-            state.Message = cues.Count > 0
-                ? string.Create(CultureInfo.InvariantCulture, $"Generated {cues.Count} cues for first chunk.")
-                : "Worker completed but produced no cues for the first chunk.";
-
-            _logger.LogInformation(
-                "Auto-caption first chunk complete for session {SessionId}: cues={CueCount}; generatedThroughTicks={GeneratedThroughTicks}; vtt={VttPath}",
-                state.SessionId,
-                cues.Count,
-                state.GeneratedThroughTicks,
-                vttPath);
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("Auto-caption first chunk cancelled for session {SessionId}", state.SessionId);
+            _logger.LogInformation("Auto-caption generation loop cancelled for session {SessionId}", state.SessionId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Auto-caption first chunk failed for session {SessionId}", state.SessionId);
+            _logger.LogError(ex, "Auto-caption generation loop failed for session {SessionId}", state.SessionId);
             FailSession(state, ex.Message);
         }
+    }
+
+    private async Task GenerateChunkAsync(
+        CaptionSessionState state,
+        PluginConfiguration config,
+        string workerScriptPath,
+        int chunkIndex,
+        double startSeconds,
+        int chunkSeconds,
+        string audioPath,
+        string vttPath)
+    {
+        state.Message = string.Create(CultureInfo.InvariantCulture, $"Extracting caption chunk {chunkIndex}.");
+        _logger.LogInformation(
+            "Auto-caption chunk start for session {SessionId}: chunkIndex={ChunkIndex}; startSeconds={StartSeconds}; chunkSeconds={ChunkSeconds}; clientPositionTicks={ClientPositionTicks}; generatedThroughTicks={GeneratedThroughTicks}",
+            state.SessionId,
+            chunkIndex,
+            startSeconds,
+            chunkSeconds,
+            state.LastClientPositionTicks,
+            state.GeneratedThroughTicks);
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        await ExtractAudioChunkAsync(state, config, startSeconds, chunkSeconds, audioPath).ConfigureAwait(false);
+
+        if (state.Cancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        state.Message = string.Create(CultureInfo.InvariantCulture, $"Transcribing caption chunk {chunkIndex}.");
+        await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
+
+        if (state.Cancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        IReadOnlyList<CaptionCue> cues = ParseVtt(vttPath, chunkIndex);
+        long startTicks = TimeSpan.FromSeconds(startSeconds).Ticks;
+        long endTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks;
+        lock (state.SyncRoot)
+        {
+            state.Cues.AddRange(cues);
+            state.Ranges.Add(new CaptionCacheRangeDto
+            {
+                StartTicks = startTicks,
+                EndTicks = endTicks
+            });
+        }
+
+        state.GeneratedThroughTicks = Math.Max(state.GeneratedThroughTicks, endTicks);
+        state.Status = CaptionSessionStatuses.Generating;
+        state.Message = cues.Count > 0
+            ? string.Create(CultureInfo.InvariantCulture, $"Generated {cues.Count} cues for chunk {chunkIndex}.")
+            : string.Create(CultureInfo.InvariantCulture, $"Worker completed but produced no cues for chunk {chunkIndex}.");
+
+        stopwatch.Stop();
+        double realtimeFactor = chunkSeconds > 0 ? chunkSeconds / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds) : 0;
+        _logger.LogInformation(
+            "Auto-caption chunk complete for session {SessionId}: chunkIndex={ChunkIndex}; cues={CueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; generatedThroughTicks={GeneratedThroughTicks}; elapsedMs={ElapsedMs}; realtimeFactor={RealtimeFactor}; vtt={VttPath}",
+            state.SessionId,
+            chunkIndex,
+            cues.Count,
+            startTicks,
+            endTicks,
+            state.GeneratedThroughTicks,
+            stopwatch.ElapsedMilliseconds,
+            realtimeFactor,
+            vttPath);
     }
 
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, int chunkSeconds, string audioPath)
@@ -567,7 +642,7 @@ public class AutoGenerateCaptionService
         }
     }
 
-    private static IReadOnlyList<CaptionCue> ParseVtt(string vttPath)
+    private static IReadOnlyList<CaptionCue> ParseVtt(string vttPath, int chunkIndex)
     {
         var cues = new List<CaptionCue>();
         string[] lines = File.ReadAllLines(vttPath);
@@ -592,7 +667,7 @@ public class AutoGenerateCaptionService
             }
 
             cues.Add(new CaptionCue(
-                id,
+                string.Create(CultureInfo.InvariantCulture, $"chunk-{chunkIndex:000}-{id}"),
                 TimestampToTicks(match.Groups["start"].Value),
                 TimestampToTicks(match.Groups["end"].Value),
                 string.Join('\n', textLines)));
@@ -612,6 +687,11 @@ public class AutoGenerateCaptionService
             + TimeSpan.FromMinutes(minutes).Ticks
             + TimeSpan.FromSeconds(seconds).Ticks
             + TimeSpan.FromMilliseconds(milliseconds).Ticks;
+    }
+
+    private static double TicksToSeconds(long ticks)
+    {
+        return ticks / (double)TicksPerSecond;
     }
 
     private static void FailSession(CaptionSessionState state, string message)
