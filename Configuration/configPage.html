@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Auto Generate Captions</title>
+</head>
+<body>
+    <div id="AutoGenerateCaptionsConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="AutoGenerateCaptionsConfigForm">
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="FfmpegPath">FFmpeg path</label>
+                        <input id="FfmpegPath" name="FfmpegPath" type="text" is="emby-input" />
+                        <div class="fieldDescription">Optional absolute path. Leave empty to use the worker default.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="WhisperPath">Whisper path</label>
+                        <input id="WhisperPath" name="WhisperPath" type="text" is="emby-input" />
+                        <div class="fieldDescription">Path to the warm Whisper service or local transcription binary.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PrimaryModel">Primary model</label>
+                        <input id="PrimaryModel" name="PrimaryModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Model name or path to try first.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="FallbackModel">Fallback model</label>
+                        <input id="FallbackModel" name="FallbackModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Model name or path to use when the primary model cannot keep up.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PreferredBackend">Preferred backend</label>
+                        <input id="PreferredBackend" name="PreferredBackend" type="text" is="emby-input" />
+                        <div class="fieldDescription">Use auto, cuda, vulkan, metal, or cpu. CUDA is the expected path for NVIDIA cards.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="DefaultLanguage">Default language</label>
+                        <input id="DefaultLanguage" name="DefaultLanguage" type="text" is="emby-input" />
+                        <div class="fieldDescription">Use auto for detection, or a language code such as en.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="AllowCpuFallback" name="AllowCpuFallback" type="checkbox" is="emby-checkbox" />
+                            <span>Allow CPU fallback</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">If GPU/model startup fails, try CPU instead of failing the session immediately.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableVerboseWorkerLogging" name="EnableVerboseWorkerLogging" type="checkbox" is="emby-checkbox" />
+                            <span>Verbose worker logging</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Log model selection, backend detection, warmup timing, chunk timing, and fallback decisions.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="InitialChunkSeconds">Initial chunk seconds</label>
+                        <input id="InitialChunkSeconds" name="InitialChunkSeconds" type="number" is="emby-input" min="3" max="60" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ChunkSeconds">Steady chunk seconds</label>
+                        <input id="ChunkSeconds" name="ChunkSeconds" type="number" is="emby-input" min="5" max="120" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LookaheadSeconds">Lookahead seconds</label>
+                        <input id="LookaheadSeconds" name="LookaheadSeconds" type="number" is="emby-input" min="10" max="600" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PollSeconds">Client poll seconds</label>
+                        <input id="PollSeconds" name="PollSeconds" type="number" is="emby-input" min="1" max="30" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MaxConcurrentSessions">Max concurrent sessions</label>
+                        <input id="MaxConcurrentSessions" name="MaxConcurrentSessions" type="number" is="emby-input" min="1" max="4" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="CacheDirectory">Cache directory</label>
+                        <input id="CacheDirectory" name="CacheDirectory" type="text" is="emby-input" />
+                        <div class="fieldDescription">Optional directory for partial and completed generated captions.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="CachePartialResults" name="CachePartialResults" type="checkbox" is="emby-checkbox" />
+                            <span>Cache partial results</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Store generated ranges while playback is still in progress.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="PromoteCompletedSubtitles" name="PromoteCompletedSubtitles" type="checkbox" is="emby-checkbox" />
+                            <span>Promote completed subtitles</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Save completed subtitles next to media so Jellyfin can expose them normally.</div>
+                    </div>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            var AutoGenerateCaptionsConfig = {
+                pluginUniqueId: '60b28d89-4e38-41d4-9bb1-a5f051bfb0ea'
+            };
+
+            function numberValue(id, fallback) {
+                return parseInt(document.querySelector(id).value || fallback, 10);
+            }
+
+            document.querySelector('#AutoGenerateCaptionsConfigPage')
+                .addEventListener('pageshow', function() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId).then(function (config) {
+                        document.querySelector('#FfmpegPath').value = config.FfmpegPath || '';
+                        document.querySelector('#WhisperPath').value = config.WhisperPath || '';
+                        document.querySelector('#PrimaryModel').value = config.PrimaryModel || 'large-v3';
+                        document.querySelector('#FallbackModel').value = config.FallbackModel || 'medium';
+                        document.querySelector('#PreferredBackend').value = config.PreferredBackend || 'cuda';
+                        document.querySelector('#DefaultLanguage').value = config.DefaultLanguage || 'auto';
+                        document.querySelector('#AllowCpuFallback').checked = config.AllowCpuFallback !== false;
+                        document.querySelector('#EnableVerboseWorkerLogging').checked = config.EnableVerboseWorkerLogging !== false;
+                        document.querySelector('#InitialChunkSeconds').value = config.InitialChunkSeconds || 10;
+                        document.querySelector('#ChunkSeconds').value = config.ChunkSeconds || 30;
+                        document.querySelector('#LookaheadSeconds').value = config.LookaheadSeconds || 90;
+                        document.querySelector('#PollSeconds').value = config.PollSeconds || 2;
+                        document.querySelector('#MaxConcurrentSessions').value = config.MaxConcurrentSessions || 1;
+                        document.querySelector('#CacheDirectory').value = config.CacheDirectory || '';
+                        document.querySelector('#CachePartialResults').checked = config.CachePartialResults !== false;
+                        document.querySelector('#PromoteCompletedSubtitles').checked = !!config.PromoteCompletedSubtitles;
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#AutoGenerateCaptionsConfigForm')
+                .addEventListener('submit', function(e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId).then(function (config) {
+                        config.FfmpegPath = document.querySelector('#FfmpegPath').value.trim();
+                        config.WhisperPath = document.querySelector('#WhisperPath').value.trim();
+                        config.PrimaryModel = document.querySelector('#PrimaryModel').value.trim() || 'large-v3';
+                        config.FallbackModel = document.querySelector('#FallbackModel').value.trim() || 'medium';
+                        config.PreferredBackend = document.querySelector('#PreferredBackend').value.trim() || 'cuda';
+                        config.DefaultLanguage = document.querySelector('#DefaultLanguage').value.trim() || 'auto';
+                        config.AllowCpuFallback = document.querySelector('#AllowCpuFallback').checked;
+                        config.EnableVerboseWorkerLogging = document.querySelector('#EnableVerboseWorkerLogging').checked;
+                        config.InitialChunkSeconds = numberValue('#InitialChunkSeconds', '10');
+                        config.ChunkSeconds = numberValue('#ChunkSeconds', '30');
+                        config.LookaheadSeconds = numberValue('#LookaheadSeconds', '90');
+                        config.PollSeconds = numberValue('#PollSeconds', '2');
+                        config.MaxConcurrentSessions = numberValue('#MaxConcurrentSessions', '1');
+                        config.CacheDirectory = document.querySelector('#CacheDirectory').value.trim();
+                        config.CachePartialResults = document.querySelector('#CachePartialResults').checked;
+                        config.PromoteCompletedSubtitles = document.querySelector('#PromoteCompletedSubtitles').checked;
+
+                        ApiClient.updatePluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+
+                    e.preventDefault();
+                    return false;
+                });
+        </script>
+    </div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+[
+  {
+    "guid": "60b28d89-4e38-41d4-9bb1-a5f051bfb0ea",
+    "name": "Auto Generate Captions",
+    "description": "Provides on-demand generated caption sessions for custom Jellyfin clients.",
+    "overview": "Starts live WebVTT caption sessions that can be backed by a warm Whisper worker and cached for future playback.",
+    "owner": "naqadata",
+    "category": "General",
+    "versions": [
+      {
+        "version": "0.1.0.0",
+        "changelog": "Initial API, configuration, and live WebVTT session scaffold.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.0.zip",
+        "checksum": "a1b9320fd2273ea7cf714d0204157634",
+        "timestamp": "2026-06-14T00:00:00Z"
+      }
+    ]
+  }
+]

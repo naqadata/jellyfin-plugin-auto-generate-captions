@@ -1,0 +1,21 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Build and package
+        run: ./scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jellyfin.Plugin.AutoGenerateCaptions_0.1.0
+          path: dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.0.zip
