@@ -4,6 +4,12 @@ Experimental Jellyfin plugin for Roku-driven, on-demand AI caption generation.
 
 The goal is not to scan the whole library. A custom client starts a short-lived caption session when the viewer selects `Auto-Generated`, then polls a live WebVTT endpoint while the server generates and caches caption ranges.
 
+## Related Projects
+
+- [Naqafin for Roku](https://github.com/naqadata/naqafin-roku): Roku client that exposes the `Auto-Generated` subtitle option and consumes this plugin's live WebVTT endpoint.
+- [Naqafin Caption Worker](https://github.com/naqadata/naqafin-caption-worker): optional Dockerized CUDA worker that can run larger Whisper models on a separate GPU host.
+- [Jellyfin Plugin Playlist Up Next](https://github.com/naqadata/jellyfin-plugin-playlist-up-next): separate companion server plugin used by Naqafin for playlist-aware resume rows.
+
 ## Client Support
 
 This plugin is designed to work with [Naqafin for Roku](https://github.com/naqadata/naqafin-roku), an unofficial Roku client forked from the official Jellyfin Roku client.
@@ -108,6 +114,8 @@ The worker should:
 ## Remote Caption Worker
 
 The plugin can optionally submit extracted audio chunks to a remote [Naqafin Caption Worker](https://github.com/naqadata/naqafin-caption-worker) before falling back to local Whisper.
+
+The remote worker is not required. Without it, this plugin uses its local `stable_whisper` worker path.
 
 Relevant plugin settings:
 
