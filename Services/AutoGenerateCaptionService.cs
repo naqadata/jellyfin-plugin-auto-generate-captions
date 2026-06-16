@@ -91,7 +91,7 @@ public class AutoGenerateCaptionService
             state.Language);
 
         _logger.LogInformation(
-            "Auto-caption worker policy for session {SessionId}: primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; lookaheadSeconds={LookaheadSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}",
+            "Auto-caption worker policy for session {SessionId}: primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteWorkerFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; lookaheadSeconds={LookaheadSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}; promotableModels={PromotableModels}",
             sessionId,
             config.PrimaryModel,
             config.FallbackModel,
@@ -105,7 +105,8 @@ public class AutoGenerateCaptionService
             config.ChunkSeconds,
             config.LookaheadSeconds,
             config.CachePartialResults,
-            config.PromoteCompletedSubtitles);
+            config.PromoteCompletedSubtitles,
+            config.PromotableModels);
 
         if (config.EnableVerboseWorkerLogging)
         {
@@ -280,7 +281,7 @@ public class AutoGenerateCaptionService
                 state.SessionId,
                 state.CacheKey,
                 persistentCacheDirectory);
-            TryHydrateFromCombinedCache(state, persistentCacheDirectory);
+            TryHydrateFromCombinedCache(state, config, persistentCacheDirectory);
         }
         else
         {
@@ -404,7 +405,7 @@ public class AutoGenerateCaptionService
         }
 
         state.Message = string.Create(CultureInfo.InvariantCulture, $"Transcribing caption chunk {chunkIndex}.");
-        await RunTranscriptionWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
+        TranscriptionResult transcription = await RunTranscriptionWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
 
         if (state.Cancellation.IsCancellationRequested)
         {
@@ -428,7 +429,7 @@ public class AutoGenerateCaptionService
                 cachePath,
                 new FileInfo(cachePath).Length);
 
-            RebuildCombinedCacheVtt(state, persistentCacheDirectory);
+            RebuildCombinedCacheVtt(state, config, persistentCacheDirectory, transcription.Model);
         }
 
         state.Message = cues.Count > 0
@@ -576,8 +577,19 @@ public class AutoGenerateCaptionService
         return new CacheFileRange(path, startTicks, endTicks);
     }
 
-    private void TryHydrateFromCombinedCache(CaptionSessionState state, string persistentCacheDirectory)
+    private void TryHydrateFromCombinedCache(CaptionSessionState state, PluginConfiguration config, string persistentCacheDirectory)
     {
+        string model = GetConfiguredCacheModel(config);
+        if (!IsPromotableModel(config, model))
+        {
+            _logger.LogInformation(
+                "Auto-caption combined cache hydrate skipped for session {SessionId}: model={Model}; promotableModels={PromotableModels}",
+                state.SessionId,
+                model,
+                config.PromotableModels);
+            return;
+        }
+
         string combinedPath = GetCombinedVttPath(persistentCacheDirectory);
         if (!File.Exists(combinedPath))
         {
@@ -587,7 +599,7 @@ public class AutoGenerateCaptionService
                 return;
             }
 
-            RebuildCombinedCacheVtt(state, persistentCacheDirectory);
+            RebuildCombinedCacheVtt(state, config, persistentCacheDirectory, model);
         }
 
         if (!File.Exists(combinedPath))
@@ -629,10 +641,26 @@ public class AutoGenerateCaptionService
         }
     }
 
-    private void RebuildCombinedCacheVtt(CaptionSessionState state, string persistentCacheDirectory)
+    private void RebuildCombinedCacheVtt(CaptionSessionState state, PluginConfiguration config, string persistentCacheDirectory, string model)
     {
         try
         {
+            string combinedPath = GetCombinedVttPath(persistentCacheDirectory);
+            if (!IsPromotableModel(config, model))
+            {
+                if (File.Exists(combinedPath))
+                {
+                    File.Delete(combinedPath);
+                }
+
+                _logger.LogInformation(
+                    "Auto-caption combined cache skipped for session {SessionId}: model={Model}; promotableModels={PromotableModels}",
+                    state.SessionId,
+                    model,
+                    config.PromotableModels);
+                return;
+            }
+
             IReadOnlyList<CacheFileRange> ranges = GetCachedChunkRanges(persistentCacheDirectory);
             var cues = new List<CaptionCue>();
             for (int i = 0; i < ranges.Count; i++)
@@ -640,7 +668,6 @@ public class AutoGenerateCaptionService
                 cues.AddRange(ParseVtt(ranges[i].Path, i));
             }
 
-            string combinedPath = GetCombinedVttPath(persistentCacheDirectory);
             WriteVtt(combinedPath, cues);
             _logger.LogInformation(
                 "Auto-caption combined cache written for session {SessionId}: cues={CueCount}; ranges={RangeCount}; combinedPath={CombinedPath}; bytes={Bytes}",
@@ -798,15 +825,16 @@ public class AutoGenerateCaptionService
         ];
     }
 
-    private async Task RunTranscriptionWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
+    private async Task<TranscriptionResult> RunTranscriptionWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
     {
         if (config.EnableRemoteWorker && !string.IsNullOrWhiteSpace(config.RemoteWorkerUrl))
         {
+            string remoteModel = string.IsNullOrWhiteSpace(config.RemoteWorkerModel) ? config.PrimaryModel : config.RemoteWorkerModel.Trim();
             _logger.LogInformation(
                 "Auto-caption remote worker start for session {SessionId}: worker={WorkerUrl}; model={Model}; audio={AudioPath}; output={VttPath}",
                 state.SessionId,
                 config.RemoteWorkerUrl,
-                string.IsNullOrWhiteSpace(config.RemoteWorkerModel) ? config.PrimaryModel : config.RemoteWorkerModel,
+                remoteModel,
                 audioPath,
                 vttPath);
 
@@ -821,7 +849,7 @@ public class AutoGenerateCaptionService
 
             if (completed)
             {
-                return;
+                return new TranscriptionResult(remoteModel);
             }
 
             if (!config.RemoteWorkerFallbackToLocal)
@@ -834,10 +862,10 @@ public class AutoGenerateCaptionService
                 state.SessionId);
         }
 
-        await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
+        return await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
     }
 
-    private async Task RunWhisperWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
+    private async Task<TranscriptionResult> RunWhisperWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
     {
         try
         {
@@ -866,7 +894,7 @@ public class AutoGenerateCaptionService
                 throw new InvalidOperationException("Resident Whisper worker completed without writing VTT output.");
             }
 
-            return;
+            return new TranscriptionResult(string.IsNullOrWhiteSpace(response.Model) ? config.PrimaryModel : response.Model);
         }
         catch (OperationCanceledException)
         {
@@ -933,6 +961,8 @@ public class AutoGenerateCaptionService
         {
             throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture, $"Whisper worker failed with exit code {result.ExitCode}"));
         }
+
+        return new TranscriptionResult(config.PrimaryModel);
     }
 
     private string GetCacheRoot(PluginConfiguration config)
@@ -1026,6 +1056,49 @@ public class AutoGenerateCaptionService
             ? config.PrimaryModel
             : config.RemoteWorkerModel.Trim();
         return string.Join('|', "remote", config.RemoteWorkerUrl.Trim(), remoteModel);
+    }
+
+    private static bool IsPromotableModel(PluginConfiguration config, string model)
+    {
+        if (string.IsNullOrWhiteSpace(config.PromotableModels))
+        {
+            return true;
+        }
+
+        string normalizedModel = NormalizeModelName(model);
+        return config.PromotableModels
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizeModelName)
+            .Any(i => string.Equals(i, normalizedModel, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string GetConfiguredCacheModel(PluginConfiguration config)
+    {
+        if (config.EnableRemoteWorker && !string.IsNullOrWhiteSpace(config.RemoteWorkerUrl))
+        {
+            return string.IsNullOrWhiteSpace(config.RemoteWorkerModel)
+                ? config.PrimaryModel
+                : config.RemoteWorkerModel.Trim();
+        }
+
+        return config.PrimaryModel;
+    }
+
+    private static string NormalizeModelName(string model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return string.Empty;
+        }
+
+        string normalized = model.Trim().Replace('\\', '/');
+        int slashIndex = normalized.LastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex < normalized.Length - 1)
+        {
+            normalized = normalized[(slashIndex + 1)..];
+        }
+
+        return normalized;
     }
 
     private static string EnsureWorkerScript(PluginConfiguration config, string cacheRoot)
@@ -1269,6 +1342,8 @@ public class AutoGenerateCaptionService
     private sealed record CaptionCue(string Id, long StartTicks, long EndTicks, string Text);
 
     private sealed record CacheFileRange(string Path, long StartTicks, long EndTicks);
+
+    private sealed record TranscriptionResult(string Model);
 
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 }

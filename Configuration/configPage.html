@@ -138,6 +138,11 @@
                         </label>
                         <div class="fieldDescription checkboxFieldDescription">Save completed subtitles next to media so Jellyfin can expose them normally.</div>
                     </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="PromotableModels">Promotable models</label>
+                        <input id="PromotableModels" name="PromotableModels" type="text" is="emby-input" />
+                        <div class="fieldDescription">Comma-separated model names allowed to produce stitched/published captions. Empty allows any model.</div>
+                    </div>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                             <span>Save</span>
@@ -184,6 +189,7 @@
                         document.querySelector('#CacheDirectory').value = config.CacheDirectory || '';
                         document.querySelector('#CachePartialResults').checked = config.CachePartialResults !== false;
                         document.querySelector('#PromoteCompletedSubtitles').checked = !!config.PromoteCompletedSubtitles;
+                        document.querySelector('#PromotableModels').value = config.PromotableModels || 'large-v3, large-v3-turbo';
                         Dashboard.hideLoadingMsg();
                     });
                 });
@@ -217,6 +223,7 @@
                         config.CacheDirectory = document.querySelector('#CacheDirectory').value.trim();
                         config.CachePartialResults = document.querySelector('#CachePartialResults').checked;
                         config.PromoteCompletedSubtitles = document.querySelector('#PromoteCompletedSubtitles').checked;
+                        config.PromotableModels = document.querySelector('#PromotableModels').value.trim();
 
                         ApiClient.updatePluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);

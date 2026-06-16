@@ -128,6 +128,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool PromoteCompletedSubtitles { get; set; }
 
     /// <summary>
+    /// Gets or sets comma-separated model names that are considered good enough for stitched/published caption output.
+    /// Empty means any model is allowed.
+    /// </summary>
+    public string PromotableModels { get; set; } = "large-v3, large-v3-turbo";
+
+    /// <summary>
     /// Gets or sets an optional cache directory. Empty means a plugin data folder will be used later.
     /// </summary>
     public string CacheDirectory { get; set; } = string.Empty;

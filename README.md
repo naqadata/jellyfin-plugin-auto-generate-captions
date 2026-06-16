@@ -109,7 +109,14 @@ The worker should:
 - Generate a small first chunk, then larger steady chunks.
 - Keep `LookaheadSeconds` generated ahead of playback.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
-- Promote completed captions to a normal external subtitle only when configured.
+- Keep chunk caches for all models, but only write stitched/promoted captions when the model is listed in `Promotable models`.
+- Promote completed captions to a normal external subtitle only when configured and model-eligible.
+
+Relevant cache/promotion settings:
+
+- `Cache partial results`: keeps generated chunks so future sessions can reuse them.
+- `Promote completed subtitles`: enables stitched/published caption output.
+- `Promotable models`: comma-separated model allowlist for stitched/published output. Defaults to `large-v3, large-v3-turbo`; empty allows any model.
 
 ## Remote Caption Worker
 
