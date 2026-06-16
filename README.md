@@ -109,14 +109,14 @@ The worker should:
 - Generate a small first chunk, then larger steady chunks.
 - Keep `LookaheadSeconds` generated ahead of playback.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
-- Keep chunk caches for all models, but only write stitched/promoted captions when the model is listed in `Promotable models`.
-- Promote completed captions to a normal external subtitle only when configured and model-eligible.
+- Keep chunk caches for all models, but only write stitched cache output when the model is listed in `Promotable models`.
+- External subtitle promotion is planned, but not implemented yet.
 
 Relevant cache/promotion settings:
 
 - `Cache partial results`: keeps generated chunks so future sessions can reuse them.
-- `Promote completed subtitles`: enables stitched/published caption output.
-- `Promotable models`: comma-separated model allowlist for stitched/published output. Defaults to `large-v3, large-v3-turbo`; empty allows any model.
+- `Promote completed subtitles`: reserved for future external subtitle promotion. Current builds write stitched cache VTTs for model-eligible sessions.
+- `Promotable models`: comma-separated model allowlist for stitched cache output now and external subtitle promotion later. Defaults to `large-v3, large-v3-turbo`; empty allows any model.
 
 ## Remote Caption Worker
 
@@ -146,7 +146,7 @@ The worker should log enough detail to debug startup and GPU behavior from Jelly
 - Fallback reason when primary model or GPU initialization fails.
 - ffmpeg command shape, input seek position, selected audio stream, startup time, and extraction time.
 - Per-chunk timings, realtime factor, generated range, and whether the chunk was served from cache.
-- Cache file path/range writes and promotion to external subtitle files.
+- Cache file path/range writes and stitched cache eligibility decisions.
 
 ## Packaging
 

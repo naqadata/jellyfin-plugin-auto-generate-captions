@@ -128,7 +128,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool PromoteCompletedSubtitles { get; set; }
 
     /// <summary>
-    /// Gets or sets comma-separated model names that are considered good enough for stitched/published caption output.
+    /// Gets or sets comma-separated model names that are considered good enough for stitched cache output and future external subtitle promotion.
     /// Empty means any model is allowed.
     /// </summary>
     public string PromotableModels { get; set; } = "large-v3, large-v3-turbo";

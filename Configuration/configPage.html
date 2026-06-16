@@ -136,12 +136,12 @@
                             <input id="PromoteCompletedSubtitles" name="PromoteCompletedSubtitles" type="checkbox" is="emby-checkbox" />
                             <span>Promote completed subtitles</span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Save completed subtitles next to media so Jellyfin can expose them normally.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Reserved for saving completed subtitles next to media in a future release. Today, completed model-eligible sessions write a stitched cache VTT.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PromotableModels">Promotable models</label>
                         <input id="PromotableModels" name="PromotableModels" type="text" is="emby-input" />
-                        <div class="fieldDescription">Comma-separated model names allowed to produce stitched/published captions. Empty allows any model.</div>
+                        <div class="fieldDescription">Comma-separated model names allowed to produce stitched cache VTTs now and external subtitle files later. Empty allows any model.</div>
                     </div>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button">
