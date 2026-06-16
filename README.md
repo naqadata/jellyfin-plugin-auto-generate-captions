@@ -4,6 +4,12 @@ Experimental Jellyfin plugin for Roku-driven, on-demand AI caption generation.
 
 The goal is not to scan the whole library. A custom client starts a short-lived caption session when the viewer selects `Auto-Generated`, then polls a live WebVTT endpoint while the server generates and caches caption ranges.
 
+## Client Support
+
+This plugin is designed to work with [Naqafin for Roku](https://github.com/naqadata/naqafin-roku), an unofficial Roku client forked from the official Jellyfin Roku client.
+
+Stock Jellyfin clients do not currently know how to start these caption sessions or poll the live generated WebVTT endpoint. Until equivalent support is accepted upstream or implemented by another client, Naqafin is the intended client for this plugin.
+
 ## Current State
 
 This first implementation provides:
@@ -70,12 +76,14 @@ Stop:
 POST /AutoGenerateCaptions/Sessions/{sessionId}/Stop
 ```
 
-## Roku Integration Sketch
+## Naqafin Integration Sketch
 
-The matching Roku worktree is expected at:
+The matching Roku client is [Naqafin for Roku](https://github.com/naqadata/naqafin-roku).
+
+In this workspace, the corresponding development checkout is usually at:
 
 ```text
-../jellyfin-roku-auto-generate-captions
+../naqafin-roku
 ```
 
 Client behavior:
@@ -109,3 +117,15 @@ The worker should log enough detail to debug startup and GPU behavior from Jelly
 - ffmpeg command shape, input seek position, selected audio stream, startup time, and extraction time.
 - Per-chunk timings, realtime factor, generated range, and whether the chunk was served from cache.
 - Cache file path/range writes and promotion to external subtitle files.
+
+## Packaging
+
+Create a new release package with an explicit version and changelog:
+
+```bash
+./scripts/package.sh 0.1.1 "Describe the release"
+```
+
+The script writes `dist/Jellyfin.Plugin.AutoGenerateCaptions_<version>.zip` and adds a matching `manifest.json` version entry with checksum and timestamp.
+
+Release artifacts are treated as immutable once pushed. The script refuses to overwrite an existing zip or manifest version unless `--force` is passed, and it rejects versions lower than the latest manifest version.
