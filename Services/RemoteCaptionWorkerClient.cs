@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Jellyfin.Plugin.AutoGenerateCaptions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +15,7 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 /// </summary>
 public sealed class RemoteCaptionWorkerClient : IDisposable
 {
+    private static readonly Regex FirstPersonRegex = new(@"\bi(?:('|\u2019)(m|ve|ll|d))?\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -158,6 +160,12 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             form.Add(new StringContent(GetRemoteModel(config)), "model");
             form.Add(new StringContent(NormalizeLanguage(language)), "language");
             form.Add(new StringContent("json"), "output_format");
+            form.Add(new StringContent(Math.Clamp(config.VadThreshold, 0.05, 0.95).ToString("0.###", CultureInfo.InvariantCulture)), "vad_threshold");
+            form.Add(new StringContent(config.EnableRegrouping ? "true" : "false"), "enable_regrouping");
+            form.Add(new StringContent(Math.Clamp(config.RegroupSplitGapSeconds, 0.1, 2.0).ToString("0.###", CultureInfo.InvariantCulture)), "regroup_split_gap_seconds");
+            form.Add(new StringContent(Math.Clamp(config.MaxCueCharacters, 20, 180).ToString(CultureInfo.InvariantCulture)), "max_cue_characters");
+            form.Add(new StringContent(Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture)), "max_cue_words");
+            form.Add(new StringContent(Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture)), "max_cue_duration_seconds");
 
             using HttpRequestMessage request = CreateRequest(HttpMethod.Post, new Uri(baseUri, "v1/jobs"), config);
             request.Content = form;
@@ -287,7 +295,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         var cues = new List<RemoteCue>();
         foreach (RemoteSegment segment in segments)
         {
-            string text = segment.Text.Trim();
+            string text = NormalizeCaptionText(segment.Text.Trim());
             if (string.IsNullOrWhiteSpace(text))
             {
                 continue;
@@ -338,6 +346,17 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{hours:00}:{minutes:00}:{wholeSeconds:00}.{milliseconds:000}");
+    }
+
+    private static string NormalizeCaptionText(string text)
+    {
+        return FirstPersonRegex.Replace(
+            text,
+            match =>
+            {
+                string suffix = match.Groups[2].Value;
+                return string.IsNullOrEmpty(suffix) ? "I" : string.Create(CultureInfo.InvariantCulture, $"I'{suffix}");
+            });
     }
 
     private sealed record RemoteJobResponse(

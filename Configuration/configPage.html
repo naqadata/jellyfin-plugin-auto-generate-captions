@@ -108,6 +108,11 @@
                         <input id="ChunkSeconds" name="ChunkSeconds" type="number" is="emby-input" min="5" max="120" />
                     </div>
                     <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ChunkOverlapSeconds">Chunk overlap seconds</label>
+                        <input id="ChunkOverlapSeconds" name="ChunkOverlapSeconds" type="number" is="emby-input" min="0" max="15" />
+                        <div class="fieldDescription">Extra audio included before each later chunk to improve captions crossing a chunk boundary.</div>
+                    </div>
+                    <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="LookaheadSeconds">Lookahead seconds</label>
                         <input id="LookaheadSeconds" name="LookaheadSeconds" type="number" is="emby-input" min="10" max="600" />
                     </div>
@@ -118,6 +123,34 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="MaxConcurrentSessions">Max concurrent sessions</label>
                         <input id="MaxConcurrentSessions" name="MaxConcurrentSessions" type="number" is="emby-input" min="1" max="4" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="VadThreshold">VAD threshold</label>
+                        <input id="VadThreshold" name="VadThreshold" type="number" is="emby-input" min="0.05" max="0.95" step="0.05" />
+                        <div class="fieldDescription">Higher values split more aggressively on silence but can miss quiet speech.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableRegrouping" name="EnableRegrouping" type="checkbox" is="emby-checkbox" />
+                            <span>Regroup generated captions</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Split Whisper output on punctuation, pauses, cue length, and cue duration.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RegroupSplitGapSeconds">Regroup split gap seconds</label>
+                        <input id="RegroupSplitGapSeconds" name="RegroupSplitGapSeconds" type="number" is="emby-input" min="0.1" max="2" step="0.05" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MaxCueCharacters">Max cue characters</label>
+                        <input id="MaxCueCharacters" name="MaxCueCharacters" type="number" is="emby-input" min="20" max="180" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MaxCueWords">Max cue words</label>
+                        <input id="MaxCueWords" name="MaxCueWords" type="number" is="emby-input" min="3" max="40" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MaxCueDurationSeconds">Max cue duration seconds</label>
+                        <input id="MaxCueDurationSeconds" name="MaxCueDurationSeconds" type="number" is="emby-input" min="1" max="15" step="0.5" />
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="CacheDirectory">Cache directory</label>
@@ -160,6 +193,14 @@
                 return parseInt(document.querySelector(id).value || fallback, 10);
             }
 
+            function decimalValue(id, fallback) {
+                return parseFloat(document.querySelector(id).value || fallback);
+            }
+
+            function configValue(config, name, fallback) {
+                return config[name] === undefined || config[name] === null ? fallback : config[name];
+            }
+
             document.querySelector('#AutoGenerateCaptionsConfigPage')
                 .addEventListener('pageshow', function() {
                     Dashboard.showLoadingMsg();
@@ -183,9 +224,16 @@
                         document.querySelector('#RemoteWorkerPollSeconds').value = config.RemoteWorkerPollSeconds || 2;
                         document.querySelector('#InitialChunkSeconds').value = config.InitialChunkSeconds || 10;
                         document.querySelector('#ChunkSeconds').value = config.ChunkSeconds || 30;
+                        document.querySelector('#ChunkOverlapSeconds').value = configValue(config, 'ChunkOverlapSeconds', 4);
                         document.querySelector('#LookaheadSeconds').value = config.LookaheadSeconds || 90;
                         document.querySelector('#PollSeconds').value = config.PollSeconds || 2;
                         document.querySelector('#MaxConcurrentSessions').value = config.MaxConcurrentSessions || 1;
+                        document.querySelector('#VadThreshold').value = configValue(config, 'VadThreshold', 0.35);
+                        document.querySelector('#EnableRegrouping').checked = config.EnableRegrouping !== false;
+                        document.querySelector('#RegroupSplitGapSeconds').value = configValue(config, 'RegroupSplitGapSeconds', 0.35);
+                        document.querySelector('#MaxCueCharacters').value = config.MaxCueCharacters || 84;
+                        document.querySelector('#MaxCueWords').value = config.MaxCueWords || 14;
+                        document.querySelector('#MaxCueDurationSeconds').value = configValue(config, 'MaxCueDurationSeconds', 6);
                         document.querySelector('#CacheDirectory').value = config.CacheDirectory || '';
                         document.querySelector('#CachePartialResults').checked = config.CachePartialResults !== false;
                         document.querySelector('#PromoteCompletedSubtitles').checked = !!config.PromoteCompletedSubtitles;
@@ -217,9 +265,16 @@
                         config.RemoteWorkerPollSeconds = numberValue('#RemoteWorkerPollSeconds', '2');
                         config.InitialChunkSeconds = numberValue('#InitialChunkSeconds', '10');
                         config.ChunkSeconds = numberValue('#ChunkSeconds', '30');
+                        config.ChunkOverlapSeconds = numberValue('#ChunkOverlapSeconds', '4');
                         config.LookaheadSeconds = numberValue('#LookaheadSeconds', '90');
                         config.PollSeconds = numberValue('#PollSeconds', '2');
                         config.MaxConcurrentSessions = numberValue('#MaxConcurrentSessions', '1');
+                        config.VadThreshold = decimalValue('#VadThreshold', '0.35');
+                        config.EnableRegrouping = document.querySelector('#EnableRegrouping').checked;
+                        config.RegroupSplitGapSeconds = decimalValue('#RegroupSplitGapSeconds', '0.35');
+                        config.MaxCueCharacters = numberValue('#MaxCueCharacters', '84');
+                        config.MaxCueWords = numberValue('#MaxCueWords', '14');
+                        config.MaxCueDurationSeconds = decimalValue('#MaxCueDurationSeconds', '6');
                         config.CacheDirectory = document.querySelector('#CacheDirectory').value.trim();
                         config.CachePartialResults = document.querySelector('#CachePartialResults').checked;
                         config.PromoteCompletedSubtitles = document.querySelector('#PromoteCompletedSubtitles').checked;

@@ -3,6 +3,7 @@ import argparse
 import gc
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -10,6 +11,8 @@ from datetime import timedelta
 import wave
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+FIRST_PERSON_REGEX = re.compile(r"\bi(?:('|\u2019)(m|ve|ll|d))?\b", re.IGNORECASE)
 
 
 def log(event, stream=None, **fields):
@@ -26,10 +29,21 @@ def format_timestamp(seconds):
     return f"{hours:02}:{minutes:02}:{whole_seconds:02}.{milliseconds:03}"
 
 
+def normalize_caption_text(text):
+    def replace(match):
+        suffix = match.group(2)
+        if not suffix:
+            return "I"
+
+        return "I'" + suffix
+
+    return FIRST_PERSON_REGEX.sub(replace, text)
+
+
 def write_vtt(path, segments, offset_seconds, start_padding, end_padding, min_duration):
     cues = []
     for segment in segments:
-        text = segment.text.strip()
+        text = normalize_caption_text(segment.text.strip())
         if not text:
             continue
 
@@ -59,6 +73,48 @@ def write_vtt(path, segments, offset_seconds, start_padding, end_padding, min_du
             output.write(f"{format_timestamp(cue['start'])} --> {format_timestamp(cue['end'])}\n")
             output.write(cue["text"])
             output.write("\n\n")
+
+
+def apply_regrouping(result, args, log_stream=None):
+    if not args.enable_regrouping:
+        return result
+
+    try:
+        if hasattr(result, "clamp_max"):
+            result.clamp_max()
+
+        if hasattr(result, "split_by_punctuation"):
+            result.split_by_punctuation(
+                [(".", " "), "?", "!", (";", " "), (":", " "), (",", " ")],
+                min_words=4,
+                ignore_special_periods=True,
+            )
+
+        if hasattr(result, "split_by_gap") and args.regroup_split_gap_seconds > 0:
+            result.split_by_gap(args.regroup_split_gap_seconds)
+
+        if hasattr(result, "split_by_length"):
+            result.split_by_length(
+                max_chars=args.max_cue_characters,
+                max_words=args.max_cue_words,
+                even_split=False,
+            )
+
+        if hasattr(result, "split_by_duration") and args.max_cue_duration_seconds > 0:
+            result.split_by_duration(args.max_cue_duration_seconds, even_split=False)
+
+        log(
+            "regroup-complete",
+            stream=log_stream,
+            splitGapSeconds=args.regroup_split_gap_seconds,
+            maxCueCharacters=args.max_cue_characters,
+            maxCueWords=args.max_cue_words,
+            maxCueDurationSeconds=args.max_cue_duration_seconds,
+        )
+    except Exception as exc:
+        log("regroup-failed", stream=log_stream, errorType=type(exc).__name__, error=repr(exc))
+
+    return result
 
 
 def clear_cuda(torch):
@@ -138,14 +194,17 @@ def load_model(args, torch, stable_whisper, log_stream=None):
 def transcribe_audio(args, model, selected_model, selected_device, torch, stable_whisper, audio, output, offset_seconds, language_value, log_stream=None):
     transcribe_started = time.monotonic()
     language = None if language_value.lower() == "auto" else language_value
+    transcribe_kwargs = {
+        "verbose": False,
+        "language": language,
+        "vad": True,
+        "vad_threshold": args.vad_threshold,
+    }
+    if args.enable_regrouping:
+        transcribe_kwargs["regroup"] = False
+
     try:
-        result = model.transcribe(
-            audio,
-            verbose=False,
-            language=language,
-            vad=True,
-            vad_threshold=args.vad_threshold,
-        )
+        result = model.transcribe(audio, **transcribe_kwargs)
     except Exception as exc:
         log("transcribe-failed", stream=log_stream, model=selected_model, device=selected_device, errorType=type(exc).__name__, error=repr(exc))
         if selected_device != "cuda" or not args.allow_cpu_fallback:
@@ -157,14 +216,9 @@ def transcribe_audio(args, model, selected_model, selected_device, torch, stable
         selected_device = "cpu"
         log("model-fallback", stream=log_stream, model=selected_model, device=selected_device, reason=type(exc).__name__)
         model = stable_whisper.load_model(selected_model, device=selected_device, in_memory=True)
-        result = model.transcribe(
-            audio,
-            verbose=False,
-            language=language,
-            vad=True,
-            vad_threshold=args.vad_threshold,
-        )
+        result = model.transcribe(audio, **transcribe_kwargs)
 
+    result = apply_regrouping(result, args, log_stream=log_stream)
     segments = list(getattr(result, "segments", []))
     transcribe_elapsed = time.monotonic() - transcribe_started
     log("transcribe-complete", stream=log_stream, segmentCount=len(segments), elapsedSeconds=transcribe_elapsed)
@@ -285,6 +339,11 @@ def main():
     parser.add_argument("--allow-cpu-fallback", action="store_true")
     parser.add_argument("--offset-seconds", type=float, default=0.0)
     parser.add_argument("--vad-threshold", type=float, default=0.35)
+    parser.add_argument("--enable-regrouping", action="store_true")
+    parser.add_argument("--regroup-split-gap-seconds", type=float, default=0.35)
+    parser.add_argument("--max-cue-characters", type=int, default=84)
+    parser.add_argument("--max-cue-words", type=int, default=14)
+    parser.add_argument("--max-cue-duration-seconds", type=float, default=6.0)
     parser.add_argument("--cue-start-padding", type=float, default=0.05)
     parser.add_argument("--cue-end-padding", type=float, default=0.5)
     parser.add_argument("--cue-min-duration", type=float, default=1.1)

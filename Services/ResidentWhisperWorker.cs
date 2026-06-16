@@ -23,6 +23,7 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
     private TaskCompletionSource<WorkerResponse>? _pendingResponse;
     private string? _pendingResponseId;
     private string? _workerScriptPath;
+    private string? _workerSettingsKey;
     private bool _disposed;
 
     /// <summary>
@@ -130,7 +131,8 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
     {
         lock (_syncRoot)
         {
-            if (_process is { HasExited: false })
+            string settingsKey = GetWorkerSettingsKey(config);
+            if (_process is { HasExited: false } && string.Equals(_workerSettingsKey, settingsKey, StringComparison.Ordinal))
             {
                 return;
             }
@@ -139,6 +141,7 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
             string cacheRoot = GetCacheRoot(config);
             _workerScriptPath = EnsureWorkerScript(config, cacheRoot);
             StartProcess(config, _workerScriptPath);
+            _workerSettingsKey = settingsKey;
         }
     }
 
@@ -173,6 +176,8 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
             process.StartInfo.ArgumentList.Add("--allow-cpu-fallback");
         }
 
+        AddQualityArguments(process.StartInfo.ArgumentList, config);
+
         process.OutputDataReceived += (_, e) =>
         {
             if (!string.IsNullOrWhiteSpace(e.Data))
@@ -200,18 +205,67 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
         };
 
         _logger.LogInformation(
-            "Auto-caption resident worker start: python={PythonPath}; script={WorkerScriptPath}; primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; backend={Backend}; allowCpuFallback={AllowCpuFallback}",
+            "Auto-caption resident worker start: python={PythonPath}; script={WorkerScriptPath}; primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; backend={Backend}; allowCpuFallback={AllowCpuFallback}; vadThreshold={VadThreshold}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}",
             pythonPath,
             workerScriptPath,
             config.PrimaryModel,
             config.FallbackModel,
             config.PreferredBackend,
-            config.AllowCpuFallback);
+            config.AllowCpuFallback,
+            config.VadThreshold,
+            config.EnableRegrouping,
+            config.RegroupSplitGapSeconds,
+            config.MaxCueCharacters,
+            config.MaxCueWords,
+            config.MaxCueDurationSeconds);
 
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         _process = process;
+    }
+
+    /// <summary>
+    /// Adds transcription quality arguments consumed by the Python worker.
+    /// </summary>
+    /// <param name="arguments">Argument list.</param>
+    /// <param name="config">Plugin configuration.</param>
+    public static void AddQualityArguments(ICollection<string> arguments, PluginConfiguration config)
+    {
+        arguments.Add("--vad-threshold");
+        arguments.Add(Math.Clamp(config.VadThreshold, 0.05, 0.95).ToString("0.###", CultureInfo.InvariantCulture));
+        if (config.EnableRegrouping)
+        {
+            arguments.Add("--enable-regrouping");
+        }
+
+        arguments.Add("--regroup-split-gap-seconds");
+        arguments.Add(Math.Clamp(config.RegroupSplitGapSeconds, 0.1, 2.0).ToString("0.###", CultureInfo.InvariantCulture));
+        arguments.Add("--max-cue-characters");
+        arguments.Add(Math.Clamp(config.MaxCueCharacters, 20, 180).ToString(CultureInfo.InvariantCulture));
+        arguments.Add("--max-cue-words");
+        arguments.Add(Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture));
+        arguments.Add("--max-cue-duration-seconds");
+        arguments.Add(Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture));
+    }
+
+    private static string GetWorkerSettingsKey(PluginConfiguration config)
+    {
+        return string.Join(
+            '|',
+            config.PythonPath,
+            config.WorkerScriptPath,
+            config.PrimaryModel,
+            config.FallbackModel,
+            config.DefaultLanguage,
+            config.PreferredBackend,
+            config.AllowCpuFallback.ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.VadThreshold, 0.05, 0.95).ToString("0.###", CultureInfo.InvariantCulture),
+            config.EnableRegrouping.ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.RegroupSplitGapSeconds, 0.1, 2.0).ToString("0.###", CultureInfo.InvariantCulture),
+            Math.Clamp(config.MaxCueCharacters, 20, 180).ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture));
     }
 
     private void HandleWorkerStdout(string line)

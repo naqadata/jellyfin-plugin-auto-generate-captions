@@ -103,6 +103,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public int ChunkSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Gets or sets the audio overlap before each steady-state chunk in seconds.
+    /// </summary>
+    public int ChunkOverlapSeconds { get; set; } = 4;
+
+    /// <summary>
     /// Gets or sets the target generated-caption lookahead in seconds.
     /// </summary>
     public int LookaheadSeconds { get; set; } = 90;
@@ -116,6 +121,36 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the maximum number of active transcription sessions.
     /// </summary>
     public int MaxConcurrentSessions { get; set; } = 1;
+
+    /// <summary>
+    /// Gets or sets the stable-ts VAD threshold.
+    /// </summary>
+    public double VadThreshold { get; set; } = 0.35;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether stable-ts regrouping should split cues on punctuation, silence gaps, length, and duration.
+    /// </summary>
+    public bool EnableRegrouping { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the maximum gap in seconds that can remain inside a regrouped cue.
+    /// </summary>
+    public double RegroupSplitGapSeconds { get; set; } = 0.35;
+
+    /// <summary>
+    /// Gets or sets the maximum characters in a generated cue.
+    /// </summary>
+    public int MaxCueCharacters { get; set; } = 84;
+
+    /// <summary>
+    /// Gets or sets the maximum words in a generated cue.
+    /// </summary>
+    public int MaxCueWords { get; set; } = 14;
+
+    /// <summary>
+    /// Gets or sets the maximum duration in seconds for a generated cue.
+    /// </summary>
+    public double MaxCueDurationSeconds { get; set; } = 6.0;
 
     /// <summary>
     /// Gets or sets a value indicating whether partial generated captions should be cached.
