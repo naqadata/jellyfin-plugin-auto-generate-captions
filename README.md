@@ -20,6 +20,7 @@ This first implementation provides:
 - In-memory session state.
 - First-chunk ffmpeg audio extraction.
 - A bundled Python `stable_whisper` worker with backend/model logging.
+- Optional remote HTTP caption worker support for offloading transcription to a stronger GPU host.
 - Parsing generated WebVTT cues back into the live endpoint.
 
 ## API Contract
@@ -103,6 +104,20 @@ The worker should:
 - Keep `LookaheadSeconds` generated ahead of playback.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
 - Promote completed captions to a normal external subtitle only when configured.
+
+## Remote Caption Worker
+
+The plugin can optionally submit extracted audio chunks to a remote [Naqafin Caption Worker](https://github.com/naqadata/naqafin-caption-worker) before falling back to local Whisper.
+
+Relevant plugin settings:
+
+- `Use remote caption worker`: enables the remote-first path.
+- `Remote worker URL`: worker base URL, for example `http://192.0.2.10:8765`.
+- `Remote worker API key`: optional bearer token for protected workers.
+- `Remote worker model`: model requested from the worker, for example `large-v3`.
+- `Fallback to local when unavailable`: uses the local resident/per-job worker if the remote worker cannot be reached before a job starts.
+
+Remote jobs that start and then fail are treated as generation failures. That avoids silently restarting a long failed remote job on the weaker Jellyfin server.
 
 ## Logging Requirements
 

@@ -4,3 +4,4 @@ package/
 dist/*
 !dist/.gitkeep
 !dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.0.zip
+!dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.1.zip

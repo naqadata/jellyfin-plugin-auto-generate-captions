@@ -58,6 +58,47 @@
                         </label>
                         <div class="fieldDescription checkboxFieldDescription">Log model selection, backend detection, warmup timing, chunk timing, and fallback decisions.</div>
                     </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableRemoteWorker" name="EnableRemoteWorker" type="checkbox" is="emby-checkbox" />
+                            <span>Use remote caption worker</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Try an HTTP caption worker before local Whisper transcription.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerUrl">Remote worker URL</label>
+                        <input id="RemoteWorkerUrl" name="RemoteWorkerUrl" type="text" is="emby-input" />
+                        <div class="fieldDescription">Base URL such as http://caption-worker.local:8765. Leave empty to use local transcription only.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerApiKey">Remote worker API key</label>
+                        <input id="RemoteWorkerApiKey" name="RemoteWorkerApiKey" type="password" is="emby-input" />
+                        <div class="fieldDescription">Optional bearer token. Leave empty if the worker has auth disabled.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerModel">Remote worker model</label>
+                        <input id="RemoteWorkerModel" name="RemoteWorkerModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Model to request from the remote worker. Empty uses the primary model.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="RemoteWorkerFallbackToLocal" name="RemoteWorkerFallbackToLocal" type="checkbox" is="emby-checkbox" />
+                            <span>Fallback to local when unavailable</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Use local transcription if the remote worker cannot be reached before a job starts.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerHealthTimeoutSeconds">Remote health timeout seconds</label>
+                        <input id="RemoteWorkerHealthTimeoutSeconds" name="RemoteWorkerHealthTimeoutSeconds" type="number" is="emby-input" min="1" max="30" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerJobTimeoutSeconds">Remote job timeout seconds</label>
+                        <input id="RemoteWorkerJobTimeoutSeconds" name="RemoteWorkerJobTimeoutSeconds" type="number" is="emby-input" min="30" max="7200" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerPollSeconds">Remote poll seconds</label>
+                        <input id="RemoteWorkerPollSeconds" name="RemoteWorkerPollSeconds" type="number" is="emby-input" min="1" max="15" />
+                    </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="InitialChunkSeconds">Initial chunk seconds</label>
                         <input id="InitialChunkSeconds" name="InitialChunkSeconds" type="number" is="emby-input" min="3" max="60" />
@@ -127,6 +168,14 @@
                         document.querySelector('#DefaultLanguage').value = config.DefaultLanguage || 'auto';
                         document.querySelector('#AllowCpuFallback').checked = config.AllowCpuFallback !== false;
                         document.querySelector('#EnableVerboseWorkerLogging').checked = config.EnableVerboseWorkerLogging !== false;
+                        document.querySelector('#EnableRemoteWorker').checked = !!config.EnableRemoteWorker;
+                        document.querySelector('#RemoteWorkerUrl').value = config.RemoteWorkerUrl || '';
+                        document.querySelector('#RemoteWorkerApiKey').value = config.RemoteWorkerApiKey || '';
+                        document.querySelector('#RemoteWorkerModel').value = config.RemoteWorkerModel || 'large-v3';
+                        document.querySelector('#RemoteWorkerFallbackToLocal').checked = config.RemoteWorkerFallbackToLocal !== false;
+                        document.querySelector('#RemoteWorkerHealthTimeoutSeconds').value = config.RemoteWorkerHealthTimeoutSeconds || 5;
+                        document.querySelector('#RemoteWorkerJobTimeoutSeconds').value = config.RemoteWorkerJobTimeoutSeconds || 900;
+                        document.querySelector('#RemoteWorkerPollSeconds').value = config.RemoteWorkerPollSeconds || 2;
                         document.querySelector('#InitialChunkSeconds').value = config.InitialChunkSeconds || 10;
                         document.querySelector('#ChunkSeconds').value = config.ChunkSeconds || 30;
                         document.querySelector('#LookaheadSeconds').value = config.LookaheadSeconds || 90;
@@ -152,6 +201,14 @@
                         config.DefaultLanguage = document.querySelector('#DefaultLanguage').value.trim() || 'auto';
                         config.AllowCpuFallback = document.querySelector('#AllowCpuFallback').checked;
                         config.EnableVerboseWorkerLogging = document.querySelector('#EnableVerboseWorkerLogging').checked;
+                        config.EnableRemoteWorker = document.querySelector('#EnableRemoteWorker').checked;
+                        config.RemoteWorkerUrl = document.querySelector('#RemoteWorkerUrl').value.trim();
+                        config.RemoteWorkerApiKey = document.querySelector('#RemoteWorkerApiKey').value.trim();
+                        config.RemoteWorkerModel = document.querySelector('#RemoteWorkerModel').value.trim() || 'large-v3';
+                        config.RemoteWorkerFallbackToLocal = document.querySelector('#RemoteWorkerFallbackToLocal').checked;
+                        config.RemoteWorkerHealthTimeoutSeconds = numberValue('#RemoteWorkerHealthTimeoutSeconds', '5');
+                        config.RemoteWorkerJobTimeoutSeconds = numberValue('#RemoteWorkerJobTimeoutSeconds', '900');
+                        config.RemoteWorkerPollSeconds = numberValue('#RemoteWorkerPollSeconds', '2');
                         config.InitialChunkSeconds = numberValue('#InitialChunkSeconds', '10');
                         config.ChunkSeconds = numberValue('#ChunkSeconds', '30');
                         config.LookaheadSeconds = numberValue('#LookaheadSeconds', '90');

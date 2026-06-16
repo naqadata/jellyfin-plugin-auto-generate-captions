@@ -25,6 +25,7 @@ public class AutoGenerateCaptionService
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
     private readonly IApplicationPaths _applicationPaths;
     private readonly ResidentWhisperWorker _residentWhisperWorker;
+    private readonly RemoteCaptionWorkerClient _remoteCaptionWorkerClient;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
 
     /// <summary>
@@ -32,14 +33,17 @@ public class AutoGenerateCaptionService
     /// </summary>
     /// <param name="applicationPaths">Application paths.</param>
     /// <param name="residentWhisperWorker">Resident Whisper worker.</param>
+    /// <param name="remoteCaptionWorkerClient">Remote caption worker client.</param>
     /// <param name="logger">Logger.</param>
     public AutoGenerateCaptionService(
         IApplicationPaths applicationPaths,
         ResidentWhisperWorker residentWhisperWorker,
+        RemoteCaptionWorkerClient remoteCaptionWorkerClient,
         ILogger<AutoGenerateCaptionService> logger)
     {
         _applicationPaths = applicationPaths;
         _residentWhisperWorker = residentWhisperWorker;
+        _remoteCaptionWorkerClient = remoteCaptionWorkerClient;
         _logger = logger;
     }
 
@@ -87,12 +91,16 @@ public class AutoGenerateCaptionService
             state.Language);
 
         _logger.LogInformation(
-            "Auto-caption worker policy for session {SessionId}: primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; lookaheadSeconds={LookaheadSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}",
+            "Auto-caption worker policy for session {SessionId}: primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; lookaheadSeconds={LookaheadSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}",
             sessionId,
             config.PrimaryModel,
             config.FallbackModel,
             config.PreferredBackend,
             config.AllowCpuFallback,
+            config.EnableRemoteWorker,
+            config.RemoteWorkerUrl,
+            config.RemoteWorkerModel,
+            config.RemoteWorkerFallbackToLocal,
             config.InitialChunkSeconds,
             config.ChunkSeconds,
             config.LookaheadSeconds,
@@ -396,7 +404,7 @@ public class AutoGenerateCaptionService
         }
 
         state.Message = string.Create(CultureInfo.InvariantCulture, $"Transcribing caption chunk {chunkIndex}.");
-        await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
+        await RunTranscriptionWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
 
         if (state.Cancellation.IsCancellationRequested)
         {
@@ -790,6 +798,45 @@ public class AutoGenerateCaptionService
         ];
     }
 
+    private async Task RunTranscriptionWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
+    {
+        if (config.EnableRemoteWorker && !string.IsNullOrWhiteSpace(config.RemoteWorkerUrl))
+        {
+            _logger.LogInformation(
+                "Auto-caption remote worker start for session {SessionId}: worker={WorkerUrl}; model={Model}; audio={AudioPath}; output={VttPath}",
+                state.SessionId,
+                config.RemoteWorkerUrl,
+                string.IsNullOrWhiteSpace(config.RemoteWorkerModel) ? config.PrimaryModel : config.RemoteWorkerModel,
+                audioPath,
+                vttPath);
+
+            bool completed = await _remoteCaptionWorkerClient.TryTranscribeAsync(
+                config,
+                state.SessionId,
+                audioPath,
+                vttPath,
+                startSeconds,
+                state.Language,
+                state.Cancellation.Token).ConfigureAwait(false);
+
+            if (completed)
+            {
+                return;
+            }
+
+            if (!config.RemoteWorkerFallbackToLocal)
+            {
+                throw new InvalidOperationException("Remote caption worker is unavailable and local fallback is disabled.");
+            }
+
+            _logger.LogWarning(
+                "Auto-caption remote worker unavailable before job start for session {SessionId}; falling back to local transcription.",
+                state.SessionId);
+        }
+
+        await RunWhisperWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, startSeconds).ConfigureAwait(false);
+    }
+
     private async Task RunWhisperWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
     {
         try
@@ -914,6 +961,7 @@ public class AutoGenerateCaptionService
             config.PrimaryModel,
             config.FallbackModel,
             config.PreferredBackend,
+            GetRemoteCacheFingerprint(config),
             fingerprint);
 
         state.CacheKey = HashString(keyMaterial);
@@ -965,6 +1013,19 @@ public class AutoGenerateCaptionService
     {
         byte[] bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static string GetRemoteCacheFingerprint(PluginConfiguration config)
+    {
+        if (!config.EnableRemoteWorker || string.IsNullOrWhiteSpace(config.RemoteWorkerUrl))
+        {
+            return "local";
+        }
+
+        string remoteModel = string.IsNullOrWhiteSpace(config.RemoteWorkerModel)
+            ? config.PrimaryModel
+            : config.RemoteWorkerModel.Trim();
+        return string.Join('|', "remote", config.RemoteWorkerUrl.Trim(), remoteModel);
     }
 
     private static string EnsureWorkerScript(PluginConfiguration config, string cacheRoot)

@@ -14,6 +14,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddSingleton<ResidentWhisperWorker>();
+        serviceCollection.AddSingleton<RemoteCaptionWorkerClient>();
         serviceCollection.AddHostedService(provider => provider.GetRequiredService<ResidentWhisperWorker>());
         serviceCollection.AddSingleton<AutoGenerateCaptionService>();
     }

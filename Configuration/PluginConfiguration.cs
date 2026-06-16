@@ -48,6 +48,46 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableVerboseWorkerLogging { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the plugin should try an HTTP caption worker before local transcription.
+    /// </summary>
+    public bool EnableRemoteWorker { get; set; }
+
+    /// <summary>
+    /// Gets or sets the remote caption worker base URL.
+    /// </summary>
+    public string RemoteWorkerUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the optional remote caption worker bearer token.
+    /// </summary>
+    public string RemoteWorkerApiKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the model name to request from the remote caption worker. Empty uses PrimaryModel.
+    /// </summary>
+    public string RemoteWorkerModel { get; set; } = "large-v3";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether local transcription should be used when the remote worker is unavailable before a job starts.
+    /// </summary>
+    public bool RemoteWorkerFallbackToLocal { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the remote worker health check timeout in seconds.
+    /// </summary>
+    public int RemoteWorkerHealthTimeoutSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Gets or sets the remote worker job timeout in seconds.
+    /// </summary>
+    public int RemoteWorkerJobTimeoutSeconds { get; set; } = 900;
+
+    /// <summary>
+    /// Gets or sets the remote worker polling interval in seconds.
+    /// </summary>
+    public int RemoteWorkerPollSeconds { get; set; } = 2;
+
+    /// <summary>
     /// Gets or sets the default transcription language. Use auto to let the worker detect it.
     /// </summary>
     public string DefaultLanguage { get; set; } = "auto";

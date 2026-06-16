@@ -14,6 +14,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.0.zip",
         "checksum": "aef638bc482371462731a56cc580b438",
         "timestamp": "2026-06-14T00:00:00Z"
+      },
+      {
+        "version": "0.1.1.0",
+        "changelog": "Add optional remote CUDA caption worker support",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.1.zip",
+        "checksum": "68423ec9bc6759fcb3fb97cf5e87bd2a",
+        "timestamp": "2026-06-16T04:00:11Z"
       }
     ]
   }
