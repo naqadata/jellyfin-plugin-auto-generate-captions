@@ -26,8 +26,11 @@ This first implementation provides:
 - In-memory session state.
 - First-chunk ffmpeg audio extraction.
 - A bundled Python `stable_whisper` worker with backend/model logging.
+- Resident local Whisper worker support to keep a model warm between chunk jobs when possible.
 - Optional remote HTTP caption worker support for offloading transcription to a stronger GPU host.
 - Parsing generated WebVTT cues back into the live endpoint.
+- Persistent partial-chunk cache and stitched cache output for promotable models.
+- Cue-shaping controls for max cue characters, max cue words, max cue duration, regrouping, and split-gap behavior.
 
 ## API Contract
 
@@ -117,6 +120,15 @@ Relevant cache/promotion settings:
 - `Cache partial results`: keeps generated chunks so future sessions can reuse them.
 - `Promote completed subtitles`: reserved for future external subtitle promotion. Current builds write stitched cache VTTs for model-eligible sessions.
 - `Promotable models`: comma-separated model allowlist for stitched cache output now and external subtitle promotion later. Defaults to `large-v3, large-v3-turbo`; empty allows any model.
+
+Relevant cue-shaping settings:
+
+- `Max cue characters`: target maximum characters per generated cue before the worker splits or regroups text.
+- `Max cue words`: target maximum words per generated cue.
+- `Max cue duration seconds`: target maximum cue display duration.
+- `Regroup split gap seconds`: pause length that encourages splitting speech into separate cues.
+
+These settings affect newly generated or regenerated caption chunks. Cached chunks are reused until the cache key changes or the cache is cleared.
 
 ## Remote Caption Worker
 
