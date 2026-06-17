@@ -90,22 +90,27 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerHealthTimeoutSeconds">Remote health timeout seconds</label>
                         <input id="RemoteWorkerHealthTimeoutSeconds" name="RemoteWorkerHealthTimeoutSeconds" type="number" is="emby-input" min="1" max="30" />
+                        <div class="fieldDescription">How long to wait for the remote worker health check before treating it as unavailable. Lower values fail over faster; higher values tolerate slow networks.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerJobTimeoutSeconds">Remote job timeout seconds</label>
                         <input id="RemoteWorkerJobTimeoutSeconds" name="RemoteWorkerJobTimeoutSeconds" type="number" is="emby-input" min="30" max="7200" />
+                        <div class="fieldDescription">Maximum time a remote transcription job may run before the plugin gives up on it. Larger models and CPU workers may need more time.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="RemoteWorkerPollSeconds">Remote poll seconds</label>
                         <input id="RemoteWorkerPollSeconds" name="RemoteWorkerPollSeconds" type="number" is="emby-input" min="1" max="15" />
+                        <div class="fieldDescription">How often Jellyfin checks the remote worker for job progress. Shorter intervals update faster but create more HTTP traffic.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="InitialChunkSeconds">Initial chunk seconds</label>
                         <input id="InitialChunkSeconds" name="InitialChunkSeconds" type="number" is="emby-input" min="3" max="60" />
+                        <div class="fieldDescription">Length of the first audio chunk generated after playback starts. Smaller values can show captions sooner but may be less accurate.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="ChunkSeconds">Steady chunk seconds</label>
                         <input id="ChunkSeconds" name="ChunkSeconds" type="number" is="emby-input" min="5" max="120" />
+                        <div class="fieldDescription">Length of each normal audio chunk after the first one. Larger chunks are often more efficient; smaller chunks refresh captions sooner.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="ChunkOverlapSeconds">Chunk overlap seconds</label>
@@ -115,14 +120,17 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="LookaheadSeconds">Lookahead seconds</label>
                         <input id="LookaheadSeconds" name="LookaheadSeconds" type="number" is="emby-input" min="10" max="600" />
+                        <div class="fieldDescription">Target amount of captions to keep generated ahead of the current playback position.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PollSeconds">Client poll seconds</label>
                         <input id="PollSeconds" name="PollSeconds" type="number" is="emby-input" min="1" max="30" />
+                        <div class="fieldDescription">Suggested interval for clients to reload the live WebVTT file while captions are being generated.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="MaxConcurrentSessions">Max concurrent sessions</label>
                         <input id="MaxConcurrentSessions" name="MaxConcurrentSessions" type="number" is="emby-input" min="1" max="4" />
+                        <div class="fieldDescription">Maximum number of active caption generation sessions. Keep this low unless the worker has enough GPU/CPU capacity.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="VadThreshold">VAD threshold</label>
@@ -139,18 +147,22 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="RegroupSplitGapSeconds">Regroup split gap seconds</label>
                         <input id="RegroupSplitGapSeconds" name="RegroupSplitGapSeconds" type="number" is="emby-input" min="0.1" max="2" step="0.05" />
+                        <div class="fieldDescription">Pause length that encourages regrouping to split one caption cue into separate cues. Lower values create shorter, more frequent cues.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="MaxCueCharacters">Max cue characters</label>
                         <input id="MaxCueCharacters" name="MaxCueCharacters" type="number" is="emby-input" min="20" max="180" />
+                        <div class="fieldDescription">Soft maximum number of text characters in a single caption cue. Lower values make shorter lines; higher values keep more text together.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="MaxCueWords">Max cue words</label>
                         <input id="MaxCueWords" name="MaxCueWords" type="number" is="emby-input" min="3" max="40" />
+                        <div class="fieldDescription">Soft maximum number of words in a single caption cue. Lower values improve readability on small screens but can make captions change more often.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="MaxCueDurationSeconds">Max cue duration seconds</label>
                         <input id="MaxCueDurationSeconds" name="MaxCueDurationSeconds" type="number" is="emby-input" min="1" max="15" step="0.5" />
+                        <div class="fieldDescription">Soft maximum time one caption cue stays on screen. Lower values prevent long lingering captions; higher values can reduce cue churn.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="CacheDirectory">Cache directory</label>
