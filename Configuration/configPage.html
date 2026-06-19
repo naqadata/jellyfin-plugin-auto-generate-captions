@@ -82,6 +82,18 @@
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
+                            <input id="EnableLocalPunctuation" name="EnableLocalPunctuation" type="checkbox" is="emby-checkbox" />
+                            <span>Use local punctuation model</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Ask the remote worker to restore punctuation locally after Whisper transcription.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LocalPunctuationModel">Local punctuation model</label>
+                        <input id="LocalPunctuationModel" name="LocalPunctuationModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Hugging Face model used by the worker for punctuation restoration.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
                             <input id="RemoteWorkerFallbackToLocal" name="RemoteWorkerFallbackToLocal" type="checkbox" is="emby-checkbox" />
                             <span>Fallback to local when unavailable</span>
                         </label>
@@ -230,6 +242,8 @@
                         document.querySelector('#RemoteWorkerUrl').value = config.RemoteWorkerUrl || '';
                         document.querySelector('#RemoteWorkerApiKey').value = config.RemoteWorkerApiKey || '';
                         document.querySelector('#RemoteWorkerModel').value = config.RemoteWorkerModel || 'large-v3';
+                        document.querySelector('#EnableLocalPunctuation').checked = config.EnableLocalPunctuation !== false;
+                        document.querySelector('#LocalPunctuationModel').value = config.LocalPunctuationModel || 'oliverguhr/fullstop-punctuation-multilang-large';
                         document.querySelector('#RemoteWorkerFallbackToLocal').checked = config.RemoteWorkerFallbackToLocal !== false;
                         document.querySelector('#RemoteWorkerHealthTimeoutSeconds').value = config.RemoteWorkerHealthTimeoutSeconds || 5;
                         document.querySelector('#RemoteWorkerJobTimeoutSeconds').value = config.RemoteWorkerJobTimeoutSeconds || 900;
@@ -271,6 +285,8 @@
                         config.RemoteWorkerUrl = document.querySelector('#RemoteWorkerUrl').value.trim();
                         config.RemoteWorkerApiKey = document.querySelector('#RemoteWorkerApiKey').value.trim();
                         config.RemoteWorkerModel = document.querySelector('#RemoteWorkerModel').value.trim() || 'large-v3';
+                        config.EnableLocalPunctuation = document.querySelector('#EnableLocalPunctuation').checked;
+                        config.LocalPunctuationModel = document.querySelector('#LocalPunctuationModel').value.trim() || 'oliverguhr/fullstop-punctuation-multilang-large';
                         config.RemoteWorkerFallbackToLocal = document.querySelector('#RemoteWorkerFallbackToLocal').checked;
                         config.RemoteWorkerHealthTimeoutSeconds = numberValue('#RemoteWorkerHealthTimeoutSeconds', '5');
                         config.RemoteWorkerJobTimeoutSeconds = numberValue('#RemoteWorkerJobTimeoutSeconds', '900');

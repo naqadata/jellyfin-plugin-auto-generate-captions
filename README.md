@@ -142,6 +142,8 @@ Relevant plugin settings:
 - `Remote worker URL`: worker base URL, for example `http://192.0.2.10:8765`.
 - `Remote worker API key`: optional bearer token for protected workers.
 - `Remote worker model`: model requested from the worker, for example `large-v3`.
+- `Use local punctuation model`: asks the worker to restore punctuation locally after Whisper transcription.
+- `Local punctuation model`: Hugging Face punctuation model requested from the worker. Defaults to `oliverguhr/fullstop-punctuation-multilang-large`.
 - `Fallback to local when unavailable`: uses the local resident/per-job worker if the remote worker cannot be reached before a job starts.
 
 Remote jobs that start and then fail are treated as generation failures. That avoids silently restarting a long failed remote job on the weaker Jellyfin server.

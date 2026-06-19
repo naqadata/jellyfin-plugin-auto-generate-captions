@@ -68,6 +68,16 @@ public class PluginConfiguration : BasePluginConfiguration
     public string RemoteWorkerModel { get; set; } = "large-v3";
 
     /// <summary>
+    /// Gets or sets a value indicating whether the remote worker should restore punctuation with a local model.
+    /// </summary>
+    public bool EnableLocalPunctuation { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the local punctuation restoration model requested from the remote worker.
+    /// </summary>
+    public string LocalPunctuationModel { get; set; } = "oliverguhr/fullstop-punctuation-multilang-large";
+
+    /// <summary>
     /// Gets or sets a value indicating whether local transcription should be used when the remote worker is unavailable before a job starts.
     /// </summary>
     public bool RemoteWorkerFallbackToLocal { get; set; } = true;

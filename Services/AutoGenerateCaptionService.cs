@@ -3,8 +3,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 using System.Text;
+using System.Text.RegularExpressions;
 using Jellyfin.Plugin.AutoGenerateCaptions.Configuration;
 using Jellyfin.Plugin.AutoGenerateCaptions.Models;
 using MediaBrowser.Common.Configuration;
@@ -21,8 +21,9 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 3;
+    private const int GenerationPipelineVersion = 10;
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
+    private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
     private readonly IApplicationPaths _applicationPaths;
     private readonly ResidentWhisperWorker _residentWhisperWorker;
@@ -346,6 +347,20 @@ public class AutoGenerateCaptionService
                     continue;
                 }
 
+                long jumpThresholdTicks = TimeSpan.FromSeconds(Math.Max(steadyChunkSeconds, lookaheadSeconds / 2)).Ticks;
+                if (state.LastClientPositionTicks - nextStartTicks > jumpThresholdTicks)
+                {
+                    long jumpTicks = Math.Max(0, state.LastClientPositionTicks);
+                    _logger.LogInformation(
+                        "Auto-caption generation jump for session {SessionId}: nextStartTicks={NextStartTicks}; clientPositionTicks={ClientPositionTicks}; jumpThresholdTicks={JumpThresholdTicks}",
+                        state.SessionId,
+                        nextStartTicks,
+                        state.LastClientPositionTicks,
+                        jumpThresholdTicks);
+                    nextStartSeconds = TicksToSeconds(jumpTicks);
+                    MarkGeneratedThrough(state, jumpTicks);
+                }
+
                 int chunkSeconds = chunkIndex == 0 ? initialChunkSeconds : steadyChunkSeconds;
                 string chunkName = string.Create(CultureInfo.InvariantCulture, $"chunk-{chunkIndex:000}");
                 string audioPath = Path.Combine(sessionDirectory, chunkName + ".wav");
@@ -429,22 +444,11 @@ public class AutoGenerateCaptionService
         }
 
         IReadOnlyList<CaptionCue> cues = PrepareChunkCues(ParseVtt(vttPath, chunkIndex), startTicks, endTicks);
-        AddChunkResult(state, cues, startTicks, endTicks, replacementStartTicks);
+        AddChunkResult(state, cues, startTicks, endTicks);
 
         if (persistentCacheDirectory is not null)
         {
-            string cachePath = GetCachedVttPath(persistentCacheDirectory, startTicks, endTicks);
-            Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
-            WriteVtt(cachePath, cues);
-            _logger.LogInformation(
-                "Auto-caption cache write for session {SessionId}: chunkIndex={ChunkIndex}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; cachePath={CachePath}; bytes={Bytes}",
-                state.SessionId,
-                chunkIndex,
-                startTicks,
-                endTicks,
-                cachePath,
-                new FileInfo(cachePath).Length);
-
+            WriteChunkCache(state, persistentCacheDirectory, chunkIndex, startTicks, endTicks, cues);
             RebuildCombinedCacheVtt(state, config, persistentCacheDirectory, transcription.Model);
         }
 
@@ -508,7 +512,7 @@ public class AutoGenerateCaptionService
             else
             {
                 cues = ParseVtt(cachedRange.Path, chunkIndex);
-                AddChunkResult(state, cues, cachedRange.StartTicks, cachedRange.EndTicks, cachedRange.StartTicks);
+                AddChunkResult(state, cues, cachedRange.StartTicks, cachedRange.EndTicks);
             }
 
             state.HasCachedCaptions = true;
@@ -684,7 +688,7 @@ public class AutoGenerateCaptionService
             var cues = new List<CaptionCue>();
             for (int i = 0; i < ranges.Count; i++)
             {
-                cues.AddRange(ParseVtt(ranges[i].Path, i));
+                MergeChunkCues(cues, ParseVtt(ranges[i].Path, i), ranges[i].StartTicks, ranges[i].EndTicks);
             }
 
             WriteVtt(combinedPath, cues);
@@ -702,21 +706,13 @@ public class AutoGenerateCaptionService
         }
     }
 
-    private static void AddChunkResult(CaptionSessionState state, IReadOnlyList<CaptionCue> cues, long startTicks, long endTicks, long replacementStartTicks)
+    private static void AddChunkResult(CaptionSessionState state, IReadOnlyList<CaptionCue> cues, long startTicks, long endTicks)
     {
         lock (state.SyncRoot)
         {
             if (cues.Count > 0)
             {
-                state.Cues.RemoveAll(i => i.StartTicks >= replacementStartTicks && i.StartTicks < endTicks);
-            }
-
-            foreach (CaptionCue cue in cues)
-            {
-                if (!state.Cues.Any(i => i.StartTicks == cue.StartTicks && i.EndTicks == cue.EndTicks && string.Equals(i.Text, cue.Text, StringComparison.Ordinal)))
-                {
-                    state.Cues.Add(cue);
-                }
+                MergeChunkCues(state.Cues, cues, startTicks, endTicks);
             }
 
             if (!state.Ranges.Any(i => i.StartTicks == startTicks && i.EndTicks == endTicks))
@@ -731,6 +727,55 @@ public class AutoGenerateCaptionService
 
         MarkGeneratedThrough(state, endTicks);
         state.Status = CaptionSessionStatuses.Generating;
+    }
+
+    private void WriteChunkCache(
+        CaptionSessionState state,
+        string persistentCacheDirectory,
+        int chunkIndex,
+        long startTicks,
+        long endTicks,
+        IReadOnlyList<CaptionCue> cues)
+    {
+        string cachePath = GetCachedVttPath(persistentCacheDirectory, startTicks, endTicks);
+        Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+        WriteVtt(cachePath, cues);
+        _logger.LogInformation(
+            "Auto-caption cache write for session {SessionId}: chunkIndex={ChunkIndex}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; cachePath={CachePath}; bytes={Bytes}",
+            state.SessionId,
+            chunkIndex,
+            startTicks,
+            endTicks,
+            cachePath,
+            new FileInfo(cachePath).Length);
+    }
+
+    private static void MergeChunkCues(List<CaptionCue> target, IReadOnlyList<CaptionCue> cues, long startTicks, long endTicks)
+    {
+        if (cues.Count == 0)
+        {
+            return;
+        }
+
+        CaptionCue[] preservedBoundaryCues = target
+            .Where(i => i.StartTicks < startTicks && i.EndTicks > startTicks && i.StartTicks < endTicks)
+            .Select(i => i with
+            {
+                Id = i.Id + "-pre",
+                EndTicks = startTicks
+            })
+            .Where(i => i.EndTicks > i.StartTicks)
+            .ToArray();
+
+        target.RemoveAll(i => i.EndTicks > startTicks && i.StartTicks < endTicks);
+
+        foreach (CaptionCue cue in preservedBoundaryCues.Concat(cues))
+        {
+            if (!target.Any(i => i.StartTicks == cue.StartTicks && i.EndTicks == cue.EndTicks && string.Equals(i.Text, cue.Text, StringComparison.Ordinal)))
+            {
+                target.Add(cue);
+            }
+        }
     }
 
     private static bool HasCachedRange(CaptionSessionState state, long startTicks, long endTicks)
@@ -758,9 +803,21 @@ public class AutoGenerateCaptionService
     {
         return cues
             .Where(i => i.EndTicks > startTicks && i.StartTicks < endTicks)
+            .Select(i => i with { Text = NormalizeCueText(i.Text) })
+            .Select(i => i with
+            {
+                StartTicks = Math.Max(i.StartTicks, startTicks),
+                EndTicks = Math.Min(i.EndTicks, endTicks)
+            })
+            .Where(i => i.EndTicks > i.StartTicks)
             .OrderBy(i => i.StartTicks)
             .ThenBy(i => i.EndTicks)
             .ToArray();
+    }
+
+    private static string NormalizeCueText(string text)
+    {
+        return WhitespaceRegex.Replace(text.Trim(), " ");
     }
 
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, double chunkSeconds, string audioPath)
@@ -1037,6 +1094,7 @@ public class AutoGenerateCaptionService
             Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture),
             GetRemoteCacheFingerprint(config),
+            GetLocalPunctuationCacheFingerprint(config),
             fingerprint);
 
         state.CacheKey = HashString(keyMaterial);
@@ -1101,6 +1159,19 @@ public class AutoGenerateCaptionService
             ? config.PrimaryModel
             : config.RemoteWorkerModel.Trim();
         return string.Join('|', "remote", config.RemoteWorkerUrl.Trim(), remoteModel);
+    }
+
+    private static string GetLocalPunctuationCacheFingerprint(PluginConfiguration config)
+    {
+        if (!config.EnableRemoteWorker || !config.EnableLocalPunctuation)
+        {
+            return "punctuation:off";
+        }
+
+        string punctuationModel = string.IsNullOrWhiteSpace(config.LocalPunctuationModel)
+            ? "oliverguhr/fullstop-punctuation-multilang-large"
+            : config.LocalPunctuationModel.Trim();
+        return string.Join('|', "punctuation:on", punctuationModel);
     }
 
     private static bool IsPromotableModel(PluginConfiguration config, string model)

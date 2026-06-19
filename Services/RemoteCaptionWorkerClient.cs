@@ -4,7 +4,6 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using Jellyfin.Plugin.AutoGenerateCaptions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -15,7 +14,6 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 /// </summary>
 public sealed class RemoteCaptionWorkerClient : IDisposable
 {
-    private static readonly Regex FirstPersonRegex = new(@"\bi(?:('|\u2019)(m|ve|ll|d))?\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -166,6 +164,8 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             form.Add(new StringContent(Math.Clamp(config.MaxCueCharacters, 20, 180).ToString(CultureInfo.InvariantCulture)), "max_cue_characters");
             form.Add(new StringContent(Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture)), "max_cue_words");
             form.Add(new StringContent(Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture)), "max_cue_duration_seconds");
+            form.Add(new StringContent(config.EnableLocalPunctuation ? "true" : "false"), "enable_punctuation_restoration");
+            form.Add(new StringContent(GetLocalPunctuationModel(config)), "punctuation_model");
 
             using HttpRequestMessage request = CreateRequest(HttpMethod.Post, new Uri(baseUri, "v1/jobs"), config);
             request.Content = form;
@@ -283,6 +283,13 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             : config.RemoteWorkerModel.Trim();
     }
 
+    private static string GetLocalPunctuationModel(PluginConfiguration config)
+    {
+        return string.IsNullOrWhiteSpace(config.LocalPunctuationModel)
+            ? "oliverguhr/fullstop-punctuation-multilang-large"
+            : config.LocalPunctuationModel.Trim();
+    }
+
     private static string NormalizeLanguage(string language)
     {
         return string.IsNullOrWhiteSpace(language) || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
@@ -295,7 +302,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         var cues = new List<RemoteCue>();
         foreach (RemoteSegment segment in segments)
         {
-            string text = NormalizeCaptionText(segment.Text.Trim());
+            string text = segment.Text.Trim();
             if (string.IsNullOrWhiteSpace(text))
             {
                 continue;
@@ -348,17 +355,6 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             $"{hours:00}:{minutes:00}:{wholeSeconds:00}.{milliseconds:000}");
     }
 
-    private static string NormalizeCaptionText(string text)
-    {
-        return FirstPersonRegex.Replace(
-            text,
-            match =>
-            {
-                string suffix = match.Groups[2].Value;
-                return string.IsNullOrEmpty(suffix) ? "I" : string.Create(CultureInfo.InvariantCulture, $"I'{suffix}");
-            });
-    }
-
     private sealed record RemoteJobResponse(
         [property: JsonPropertyName("job_id")] string JobId,
         [property: JsonPropertyName("state")] string State,
@@ -370,6 +366,12 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         [property: JsonPropertyName("segments")] List<RemoteSegment> Segments);
 
     private sealed record RemoteSegment(
+        [property: JsonPropertyName("start")] double Start,
+        [property: JsonPropertyName("end")] double End,
+        [property: JsonPropertyName("text")] string Text,
+        [property: JsonPropertyName("words")] List<RemoteWord>? Words);
+
+    private sealed record RemoteWord(
         [property: JsonPropertyName("start")] double Start,
         [property: JsonPropertyName("end")] double End,
         [property: JsonPropertyName("text")] string Text);
