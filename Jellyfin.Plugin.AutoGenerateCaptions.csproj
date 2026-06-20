@@ -4,6 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <RootNamespace>Jellyfin.Plugin.AutoGenerateCaptions</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.AutoGenerateCaptions</AssemblyName>
+    <Version>0.1.3.0</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>

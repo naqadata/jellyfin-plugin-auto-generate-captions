@@ -30,6 +30,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.2.zip",
         "checksum": "4cdd2821792842d735683293ff228e4b",
         "timestamp": "2026-06-16T05:01:11Z"
+      },
+      {
+        "version": "0.1.3.0",
+        "changelog": "Bump plugin assembly version after 0.1.2 release",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.3.zip",
+        "checksum": "7d69730d53d4a6df0cfa4f85f1878a04",
+        "timestamp": "2026-06-20T02:56:58Z"
       }
     ]
   }
