@@ -82,18 +82,6 @@
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
-                            <input id="EnableLocalPunctuation" name="EnableLocalPunctuation" type="checkbox" is="emby-checkbox" />
-                            <span>Use local punctuation model</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Ask the remote worker to restore punctuation locally after Whisper transcription.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="LocalPunctuationModel">Local punctuation model</label>
-                        <input id="LocalPunctuationModel" name="LocalPunctuationModel" type="text" is="emby-input" />
-                        <div class="fieldDescription">Hugging Face model used by the worker for punctuation restoration.</div>
-                    </div>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label">
                             <input id="RemoteWorkerFallbackToLocal" name="RemoteWorkerFallbackToLocal" type="checkbox" is="emby-checkbox" />
                             <span>Fallback to local when unavailable</span>
                         </label>
@@ -133,6 +121,33 @@
                         <label class="inputLabel inputLabelUnfocused" for="LookaheadSeconds">Lookahead seconds</label>
                         <input id="LookaheadSeconds" name="LookaheadSeconds" type="number" is="emby-input" min="10" max="600" />
                         <div class="fieldDescription">Target amount of captions to keep generated ahead of the current playback position.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableOpenAiCaptionPolish" name="EnableOpenAiCaptionPolish" type="checkbox" is="emby-checkbox" />
+                            <span>Polish buffered captions with OpenAI</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Optionally clean up caption text and sentence breaks after enough live-caption buffer exists.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API key</label>
+                        <input id="OpenAiApiKey" name="OpenAiApiKey" type="password" is="emby-input" />
+                        <div class="fieldDescription">Only used when caption polish is enabled. Live captioning continues without it.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiCaptionPolishModel">OpenAI polish model</label>
+                        <input id="OpenAiCaptionPolishModel" name="OpenAiCaptionPolishModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Model used for buffered caption cleanup.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishLookaheadSeconds">OpenAI polish lookahead seconds</label>
+                        <input id="OpenAiPolishLookaheadSeconds" name="OpenAiPolishLookaheadSeconds" type="number" is="emby-input" min="15" max="600" />
+                        <div class="fieldDescription">Minimum generated-caption buffer ahead of playback before polishing starts.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishWindowSeconds">OpenAI polish window seconds</label>
+                        <input id="OpenAiPolishWindowSeconds" name="OpenAiPolishWindowSeconds" type="number" is="emby-input" min="30" max="1800" />
+                        <div class="fieldDescription">Maximum caption span sent in one polishing pass.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PollSeconds">Client poll seconds</label>
@@ -242,8 +257,6 @@
                         document.querySelector('#RemoteWorkerUrl').value = config.RemoteWorkerUrl || '';
                         document.querySelector('#RemoteWorkerApiKey').value = config.RemoteWorkerApiKey || '';
                         document.querySelector('#RemoteWorkerModel').value = config.RemoteWorkerModel || 'large-v3';
-                        document.querySelector('#EnableLocalPunctuation').checked = config.EnableLocalPunctuation !== false;
-                        document.querySelector('#LocalPunctuationModel').value = config.LocalPunctuationModel || 'oliverguhr/fullstop-punctuation-multilang-large';
                         document.querySelector('#RemoteWorkerFallbackToLocal').checked = config.RemoteWorkerFallbackToLocal !== false;
                         document.querySelector('#RemoteWorkerHealthTimeoutSeconds').value = config.RemoteWorkerHealthTimeoutSeconds || 5;
                         document.querySelector('#RemoteWorkerJobTimeoutSeconds').value = config.RemoteWorkerJobTimeoutSeconds || 900;
@@ -252,6 +265,11 @@
                         document.querySelector('#ChunkSeconds').value = config.ChunkSeconds || 30;
                         document.querySelector('#ChunkOverlapSeconds').value = configValue(config, 'ChunkOverlapSeconds', 4);
                         document.querySelector('#LookaheadSeconds').value = config.LookaheadSeconds || 90;
+                        document.querySelector('#EnableOpenAiCaptionPolish').checked = !!config.EnableOpenAiCaptionPolish;
+                        document.querySelector('#OpenAiApiKey').value = config.OpenAiApiKey || '';
+                        document.querySelector('#OpenAiCaptionPolishModel').value = config.OpenAiCaptionPolishModel || 'gpt-5.4-mini';
+                        document.querySelector('#OpenAiPolishLookaheadSeconds').value = config.OpenAiPolishLookaheadSeconds || 60;
+                        document.querySelector('#OpenAiPolishWindowSeconds').value = config.OpenAiPolishWindowSeconds || 180;
                         document.querySelector('#PollSeconds').value = config.PollSeconds || 2;
                         document.querySelector('#MaxConcurrentSessions').value = config.MaxConcurrentSessions || 1;
                         document.querySelector('#VadThreshold').value = configValue(config, 'VadThreshold', 0.35);
@@ -285,8 +303,6 @@
                         config.RemoteWorkerUrl = document.querySelector('#RemoteWorkerUrl').value.trim();
                         config.RemoteWorkerApiKey = document.querySelector('#RemoteWorkerApiKey').value.trim();
                         config.RemoteWorkerModel = document.querySelector('#RemoteWorkerModel').value.trim() || 'large-v3';
-                        config.EnableLocalPunctuation = document.querySelector('#EnableLocalPunctuation').checked;
-                        config.LocalPunctuationModel = document.querySelector('#LocalPunctuationModel').value.trim() || 'oliverguhr/fullstop-punctuation-multilang-large';
                         config.RemoteWorkerFallbackToLocal = document.querySelector('#RemoteWorkerFallbackToLocal').checked;
                         config.RemoteWorkerHealthTimeoutSeconds = numberValue('#RemoteWorkerHealthTimeoutSeconds', '5');
                         config.RemoteWorkerJobTimeoutSeconds = numberValue('#RemoteWorkerJobTimeoutSeconds', '900');
@@ -295,6 +311,11 @@
                         config.ChunkSeconds = numberValue('#ChunkSeconds', '30');
                         config.ChunkOverlapSeconds = numberValue('#ChunkOverlapSeconds', '4');
                         config.LookaheadSeconds = numberValue('#LookaheadSeconds', '90');
+                        config.EnableOpenAiCaptionPolish = document.querySelector('#EnableOpenAiCaptionPolish').checked;
+                        config.OpenAiApiKey = document.querySelector('#OpenAiApiKey').value.trim();
+                        config.OpenAiCaptionPolishModel = document.querySelector('#OpenAiCaptionPolishModel').value.trim() || 'gpt-5.4-mini';
+                        config.OpenAiPolishLookaheadSeconds = numberValue('#OpenAiPolishLookaheadSeconds', '60');
+                        config.OpenAiPolishWindowSeconds = numberValue('#OpenAiPolishWindowSeconds', '180');
                         config.PollSeconds = numberValue('#PollSeconds', '2');
                         config.MaxConcurrentSessions = numberValue('#MaxConcurrentSessions', '1');
                         config.VadThreshold = decimalValue('#VadThreshold', '0.35');

@@ -71,14 +71,18 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         WriteVtt(vttPath, result.Segments, offsetSeconds);
 
         _logger.LogInformation(
-            "Auto-caption remote worker complete for session {SessionId}: worker={WorkerUrl}; jobId={JobId}; model={Model}; language={Language}; segments={SegmentCount}; vttBytes={VttBytes}",
+            "Auto-caption remote worker complete for session {SessionId}: worker={WorkerUrl}; jobId={JobId}; model={Model}; language={Language}; segments={SegmentCount}; vttBytes={VttBytes}; metadataEnableRegrouping={MetadataEnableRegrouping}; metadataMaxCueCharacters={MetadataMaxCueCharacters}; metadataMaxCueWords={MetadataMaxCueWords}; metadataMaxCueDurationSeconds={MetadataMaxCueDurationSeconds}",
             sessionId,
             baseUri,
             completedJob.JobId,
             completedJob.Model,
             result.Language,
             result.Segments.Count,
-            File.Exists(vttPath) ? new FileInfo(vttPath).Length : 0);
+            File.Exists(vttPath) ? new FileInfo(vttPath).Length : 0,
+            GetMetadataValue(result.Metadata, "enable_regrouping"),
+            GetMetadataValue(result.Metadata, "max_cue_characters"),
+            GetMetadataValue(result.Metadata, "max_cue_words"),
+            GetMetadataValue(result.Metadata, "max_cue_duration_seconds"));
 
         _ = DeleteJobAsync(baseUri, config, completedJob.JobId, CancellationToken.None);
         return true;
@@ -164,8 +168,18 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             form.Add(new StringContent(Math.Clamp(config.MaxCueCharacters, 20, 180).ToString(CultureInfo.InvariantCulture)), "max_cue_characters");
             form.Add(new StringContent(Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture)), "max_cue_words");
             form.Add(new StringContent(Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture)), "max_cue_duration_seconds");
-            form.Add(new StringContent(config.EnableLocalPunctuation ? "true" : "false"), "enable_punctuation_restoration");
-            form.Add(new StringContent(GetLocalPunctuationModel(config)), "punctuation_model");
+
+            _logger.LogInformation(
+                "Auto-caption remote worker submit for session {SessionId}: worker={WorkerUrl}; model={Model}; language={Language}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}",
+                sessionId,
+                baseUri,
+                GetRemoteModel(config),
+                NormalizeLanguage(language),
+                config.EnableRegrouping,
+                config.RegroupSplitGapSeconds,
+                config.MaxCueCharacters,
+                config.MaxCueWords,
+                config.MaxCueDurationSeconds);
 
             using HttpRequestMessage request = CreateRequest(HttpMethod.Post, new Uri(baseUri, "v1/jobs"), config);
             request.Content = form;
@@ -283,11 +297,21 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             : config.RemoteWorkerModel.Trim();
     }
 
-    private static string GetLocalPunctuationModel(PluginConfiguration config)
+    private static string? GetMetadataValue(Dictionary<string, JsonElement>? metadata, string key)
     {
-        return string.IsNullOrWhiteSpace(config.LocalPunctuationModel)
-            ? "oliverguhr/fullstop-punctuation-multilang-large"
-            : config.LocalPunctuationModel.Trim();
+        if (metadata is null || !metadata.TryGetValue(key, out JsonElement value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Number => value.ToString(),
+            _ => value.ToString()
+        };
     }
 
     private static string NormalizeLanguage(string language)
@@ -363,7 +387,8 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
 
     private sealed record RemoteTranscriptResult(
         [property: JsonPropertyName("language")] string? Language,
-        [property: JsonPropertyName("segments")] List<RemoteSegment> Segments);
+        [property: JsonPropertyName("segments")] List<RemoteSegment> Segments,
+        [property: JsonPropertyName("metadata")] Dictionary<string, JsonElement>? Metadata);
 
     private sealed record RemoteSegment(
         [property: JsonPropertyName("start")] double Start,

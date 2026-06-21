@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.AutoGenerateCaptions.Configuration;
 using Jellyfin.Plugin.AutoGenerateCaptions.Models;
@@ -21,14 +25,16 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 10;
+    private const int GenerationPipelineVersion = 13;
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
     private readonly IApplicationPaths _applicationPaths;
     private readonly ResidentWhisperWorker _residentWhisperWorker;
     private readonly RemoteCaptionWorkerClient _remoteCaptionWorkerClient;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
+    private readonly HttpClient _openAiHttpClient = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoGenerateCaptionService"/> class.
@@ -93,7 +99,7 @@ public class AutoGenerateCaptionService
             state.Language);
 
         _logger.LogInformation(
-            "Auto-caption worker policy for session {SessionId}: generationPipelineVersion={GenerationPipelineVersion}; primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteWorkerFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; chunkOverlapSeconds={ChunkOverlapSeconds}; lookaheadSeconds={LookaheadSeconds}; vadThreshold={VadThreshold}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}; promotableModels={PromotableModels}",
+            "Auto-caption worker policy for session {SessionId}: generationPipelineVersion={GenerationPipelineVersion}; primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteWorkerFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; chunkOverlapSeconds={ChunkOverlapSeconds}; lookaheadSeconds={LookaheadSeconds}; openAiCaptionPolish={OpenAiCaptionPolish}; openAiPolishModel={OpenAiPolishModel}; openAiPolishLookaheadSeconds={OpenAiPolishLookaheadSeconds}; openAiPolishWindowSeconds={OpenAiPolishWindowSeconds}; vadThreshold={VadThreshold}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}; promotableModels={PromotableModels}",
             sessionId,
             GenerationPipelineVersion,
             config.PrimaryModel,
@@ -108,6 +114,10 @@ public class AutoGenerateCaptionService
             config.ChunkSeconds,
             config.ChunkOverlapSeconds,
             config.LookaheadSeconds,
+            IsOpenAiCaptionPolishConfigured(config),
+            GetOpenAiCaptionPolishModel(config),
+            config.OpenAiPolishLookaheadSeconds,
+            config.OpenAiPolishWindowSeconds,
             config.VadThreshold,
             config.EnableRegrouping,
             config.RegroupSplitGapSeconds,
@@ -451,6 +461,8 @@ public class AutoGenerateCaptionService
             WriteChunkCache(state, persistentCacheDirectory, chunkIndex, startTicks, endTicks, cues);
             RebuildCombinedCacheVtt(state, config, persistentCacheDirectory, transcription.Model);
         }
+
+        await TryPolishBufferedCaptionsAsync(state, config, persistentCacheDirectory, transcription.Model).ConfigureAwait(false);
 
         state.Message = cues.Count > 0
             ? string.Create(CultureInfo.InvariantCulture, $"Generated {cues.Count} cues for chunk {chunkIndex}.")
@@ -820,6 +832,379 @@ public class AutoGenerateCaptionService
         return WhitespaceRegex.Replace(text.Trim(), " ");
     }
 
+    private async Task TryPolishBufferedCaptionsAsync(
+        CaptionSessionState state,
+        PluginConfiguration config,
+        string? persistentCacheDirectory,
+        string model)
+    {
+        if (!IsOpenAiCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
+        {
+            return;
+        }
+
+        int requiredLookaheadSeconds = Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600);
+        long requiredLookaheadTicks = TimeSpan.FromSeconds(requiredLookaheadSeconds).Ticks;
+        long clientPositionTicks = state.LastClientPositionTicks;
+        long generatedThroughTicks = state.GeneratedThroughTicks;
+        if (generatedThroughTicks - clientPositionTicks < requiredLookaheadTicks)
+        {
+            return;
+        }
+
+        int windowSeconds = Math.Clamp(config.OpenAiPolishWindowSeconds, requiredLookaheadSeconds, 1800);
+        long windowStartTicks = Math.Max(clientPositionTicks, state.LastOpenAiPolishedThroughTicks);
+        long windowEndTicks = Math.Min(generatedThroughTicks, windowStartTicks + TimeSpan.FromSeconds(windowSeconds).Ticks);
+        if (windowEndTicks <= windowStartTicks)
+        {
+            return;
+        }
+
+        List<CaptionCue> cues;
+        lock (state.SyncRoot)
+        {
+            if (state.OpenAiPolishRunning)
+            {
+                return;
+            }
+
+            cues = state.Cues
+                .Where(i => i.EndTicks > windowStartTicks && i.StartTicks < windowEndTicks)
+                .OrderBy(i => i.StartTicks)
+                .ThenBy(i => i.EndTicks)
+                .ToList();
+            if (cues.Count < 2)
+            {
+                return;
+            }
+
+            state.OpenAiPolishRunning = true;
+        }
+
+        try
+        {
+            IReadOnlyList<CaptionCue> polished = await PolishCaptionsWithOpenAiAsync(
+                state.SessionId,
+                config,
+                cues,
+                windowStartTicks,
+                windowEndTicks,
+                state.Cancellation.Token).ConfigureAwait(false);
+
+            if (polished.Count == 0)
+            {
+                return;
+            }
+
+            lock (state.SyncRoot)
+            {
+                MergeChunkCues(state.Cues, polished, windowStartTicks, windowEndTicks);
+                state.LastOpenAiPolishedThroughTicks = Math.Max(state.LastOpenAiPolishedThroughTicks, windowEndTicks);
+            }
+
+            if (persistentCacheDirectory is not null)
+            {
+                WriteCombinedCacheFromState(state, config, persistentCacheDirectory, model);
+            }
+
+            _logger.LogInformation(
+                "Auto-caption OpenAI polish applied for session {SessionId}: model={Model}; inputCues={InputCueCount}; outputCues={OutputCueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
+                state.SessionId,
+                GetOpenAiCaptionPolishModel(config),
+                cues.Count,
+                polished.Count,
+                windowStartTicks,
+                windowEndTicks);
+        }
+        catch (OperationCanceledException) when (state.Cancellation.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Auto-caption OpenAI polish failed for session {SessionId}: model={Model}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}. Keeping original captions.",
+                state.SessionId,
+                GetOpenAiCaptionPolishModel(config),
+                windowStartTicks,
+                windowEndTicks);
+        }
+        finally
+        {
+            lock (state.SyncRoot)
+            {
+                state.OpenAiPolishRunning = false;
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<CaptionCue>> PolishCaptionsWithOpenAiAsync(
+        Guid sessionId,
+        PluginConfiguration config,
+        IReadOnlyList<CaptionCue> cues,
+        long windowStartTicks,
+        long windowEndTicks,
+        CancellationToken cancellationToken)
+    {
+        var request = new
+        {
+            model = GetOpenAiCaptionPolishModel(config),
+            input = new object[]
+            {
+                new
+                {
+                    role = "system",
+                    content = new object[]
+                    {
+                        new
+                        {
+                            type = "input_text",
+                            text = "Clean up auto-generated subtitle cues. Keep wording faithful. Prefer sentence-level cues when timing allows. Split multiple sentences into separate cues. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only cues inside the provided time range."
+                        }
+                    }
+                },
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new
+                        {
+                            type = "input_text",
+                            text = JsonSerializer.Serialize(new
+                            {
+                                window_start_ms = TicksToMilliseconds(windowStartTicks),
+                                window_end_ms = TicksToMilliseconds(windowEndTicks),
+                                cues = cues.Select(i => new
+                                {
+                                    start_ms = TicksToMilliseconds(i.StartTicks),
+                                    end_ms = TicksToMilliseconds(i.EndTicks),
+                                    text = NormalizeCueText(i.Text)
+                                })
+                            }, JsonOptions)
+                        }
+                    }
+                }
+            },
+            text = new
+            {
+                verbosity = "low",
+                format = new
+                {
+                    type = "json_schema",
+                    name = "caption_polish",
+                    strict = true,
+                    schema = new
+                    {
+                        type = "object",
+                        additionalProperties = false,
+                        properties = new
+                        {
+                            cues = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    additionalProperties = false,
+                                    properties = new
+                                    {
+                                        start_ms = new { type = "integer" },
+                                        end_ms = new { type = "integer" },
+                                        text = new { type = "string" }
+                                    },
+                                    required = new[] { "start_ms", "end_ms", "text" }
+                                }
+                            }
+                        },
+                        required = new[] { "cues" }
+                    }
+                }
+            },
+            store = false
+        };
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/responses");
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.OpenAiApiKey.Trim());
+        httpRequest.Content = JsonContent.Create(request, options: JsonOptions);
+
+        Stopwatch requestStopwatch = Stopwatch.StartNew();
+        using HttpResponseMessage response = await _openAiHttpClient.SendAsync(httpRequest, timeout.Token).ConfigureAwait(false);
+        string responseText = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+        requestStopwatch.Stop();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"OpenAI caption polish request failed with status {(int)response.StatusCode} after {requestStopwatch.ElapsedMilliseconds}ms: {responseText}"));
+        }
+
+        string outputText = ExtractOpenAiOutputText(responseText);
+        OpenAiCaptionPolishResponse? parsed = JsonSerializer.Deserialize<OpenAiCaptionPolishResponse>(outputText, JsonOptions);
+        if (parsed?.Cues is null)
+        {
+            throw new InvalidOperationException("OpenAI caption polish returned no cues.");
+        }
+
+        IReadOnlyList<CaptionCue> polished = ValidatePolishedCues(parsed.Cues, windowStartTicks, windowEndTicks);
+        if (polished.Count > cues.Count * 3)
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"OpenAI caption polish returned too many cues: input={cues.Count}; output={polished.Count}"));
+        }
+
+        _logger.LogInformation(
+            "Auto-caption OpenAI polish response for session {SessionId}: statusCode={StatusCode}; elapsedMs={ElapsedMs}; inputCues={InputCueCount}; outputCues={OutputCueCount}; responseBytes={ResponseBytes}",
+            sessionId,
+            response.StatusCode,
+            requestStopwatch.ElapsedMilliseconds,
+            cues.Count,
+            polished.Count,
+            responseText.Length);
+        return polished;
+    }
+
+    private static string ExtractOpenAiOutputText(string responseText)
+    {
+        using JsonDocument document = JsonDocument.Parse(responseText);
+        if (TryFindStringProperty(document.RootElement, "output_text", out string? outputText)
+            || TryFindStringProperty(document.RootElement, "text", out outputText))
+        {
+            return outputText ?? string.Empty;
+        }
+
+        throw new InvalidOperationException("OpenAI response did not include output text.");
+    }
+
+    private static bool TryFindStringProperty(JsonElement element, string propertyName, out string? value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, propertyName, StringComparison.Ordinal)
+                    && property.Value.ValueKind == JsonValueKind.String)
+                {
+                    value = property.Value.GetString();
+                    return !string.IsNullOrWhiteSpace(value);
+                }
+
+                if (TryFindStringProperty(property.Value, propertyName, out value))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement child in element.EnumerateArray())
+            {
+                if (TryFindStringProperty(child, propertyName, out value))
+                {
+                    return true;
+                }
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static IReadOnlyList<CaptionCue> ValidatePolishedCues(
+        IReadOnlyList<OpenAiCaptionCue> cues,
+        long windowStartTicks,
+        long windowEndTicks)
+    {
+        var output = new List<CaptionCue>();
+        long previousStartTicks = windowStartTicks;
+        foreach (OpenAiCaptionCue cue in cues.OrderBy(i => i.StartMs).ThenBy(i => i.EndMs))
+        {
+            string text = NormalizeCueText(cue.Text);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            long startTicks = Math.Clamp(MillisecondsToTicks(cue.StartMs), windowStartTicks, windowEndTicks);
+            long endTicks = Math.Clamp(MillisecondsToTicks(cue.EndMs), windowStartTicks, windowEndTicks);
+            startTicks = Math.Max(startTicks, previousStartTicks);
+            if (endTicks <= startTicks)
+            {
+                continue;
+            }
+
+            output.Add(new CaptionCue(
+                string.Create(CultureInfo.InvariantCulture, $"openai-{output.Count:000000}"),
+                startTicks,
+                endTicks,
+                text));
+            previousStartTicks = startTicks;
+        }
+
+        return output;
+    }
+
+    private void WriteCombinedCacheFromState(CaptionSessionState state, PluginConfiguration config, string persistentCacheDirectory, string model)
+    {
+        if (!IsPromotableModel(config, model))
+        {
+            return;
+        }
+
+        try
+        {
+            string combinedPath = GetCombinedVttPath(persistentCacheDirectory);
+            List<CaptionCue> cues;
+            lock (state.SyncRoot)
+            {
+                cues = state.Cues.OrderBy(i => i.StartTicks).ThenBy(i => i.EndTicks).ToList();
+            }
+
+            WriteVtt(combinedPath, cues);
+            _logger.LogInformation(
+                "Auto-caption combined cache refreshed from live state for session {SessionId}: cues={CueCount}; combinedPath={CombinedPath}; bytes={Bytes}",
+                state.SessionId,
+                cues.Count,
+                combinedPath,
+                new FileInfo(combinedPath).Length);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Auto-caption combined cache refresh failed for session {SessionId}: directory={CacheDirectory}", state.SessionId, persistentCacheDirectory);
+        }
+    }
+
+    private static bool IsOpenAiCaptionPolishConfigured(PluginConfiguration config)
+    {
+        return config.EnableOpenAiCaptionPolish && !string.IsNullOrWhiteSpace(config.OpenAiApiKey);
+    }
+
+    private static string GetOpenAiCaptionPolishModel(PluginConfiguration config)
+    {
+        return string.IsNullOrWhiteSpace(config.OpenAiCaptionPolishModel)
+            ? "gpt-5.4-mini"
+            : config.OpenAiCaptionPolishModel.Trim();
+    }
+
+    private static string GetOpenAiPolishCacheFingerprint(PluginConfiguration config)
+    {
+        if (!IsOpenAiCaptionPolishConfigured(config))
+        {
+            return "openai-polish:off";
+        }
+
+        return string.Join(
+            '|',
+            "openai-polish:on",
+            GetOpenAiCaptionPolishModel(config),
+            Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600).ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture));
+    }
+
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, double chunkSeconds, string audioPath)
     {
         string ffmpegPath = string.IsNullOrWhiteSpace(config.FfmpegPath) ? "ffmpeg" : config.FfmpegPath;
@@ -1094,7 +1479,7 @@ public class AutoGenerateCaptionService
             Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture),
             GetRemoteCacheFingerprint(config),
-            GetLocalPunctuationCacheFingerprint(config),
+            GetOpenAiPolishCacheFingerprint(config),
             fingerprint);
 
         state.CacheKey = HashString(keyMaterial);
@@ -1159,19 +1544,6 @@ public class AutoGenerateCaptionService
             ? config.PrimaryModel
             : config.RemoteWorkerModel.Trim();
         return string.Join('|', "remote", config.RemoteWorkerUrl.Trim(), remoteModel);
-    }
-
-    private static string GetLocalPunctuationCacheFingerprint(PluginConfiguration config)
-    {
-        if (!config.EnableRemoteWorker || !config.EnableLocalPunctuation)
-        {
-            return "punctuation:off";
-        }
-
-        string punctuationModel = string.IsNullOrWhiteSpace(config.LocalPunctuationModel)
-            ? "oliverguhr/fullstop-punctuation-multilang-large"
-            : config.LocalPunctuationModel.Trim();
-        return string.Join('|', "punctuation:on", punctuationModel);
     }
 
     private static bool IsPromotableModel(PluginConfiguration config, string model)
@@ -1412,6 +1784,16 @@ public class AutoGenerateCaptionService
             $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}.{time.Milliseconds:000}");
     }
 
+    private static long TicksToMilliseconds(long ticks)
+    {
+        return Math.Max(0, ticks) / TimeSpan.TicksPerMillisecond;
+    }
+
+    private static long MillisecondsToTicks(long milliseconds)
+    {
+        return Math.Max(0, milliseconds) * TimeSpan.TicksPerMillisecond;
+    }
+
     private sealed class CaptionSessionState
     {
         public Guid SessionId { get; init; }
@@ -1450,6 +1832,10 @@ public class AutoGenerateCaptionService
 
         public string? CacheKey { get; set; }
 
+        public bool OpenAiPolishRunning { get; set; }
+
+        public long LastOpenAiPolishedThroughTicks { get; set; }
+
         public object SyncRoot { get; } = new();
 
         public CancellationTokenSource Cancellation { get; } = new();
@@ -1462,4 +1848,12 @@ public class AutoGenerateCaptionService
     private sealed record TranscriptionResult(string Model);
 
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+
+    private sealed record OpenAiCaptionPolishResponse(
+        [property: JsonPropertyName("cues")] IReadOnlyList<OpenAiCaptionCue> Cues);
+
+    private sealed record OpenAiCaptionCue(
+        [property: JsonPropertyName("start_ms")] long StartMs,
+        [property: JsonPropertyName("end_ms")] long EndMs,
+        [property: JsonPropertyName("text")] string Text);
 }

@@ -127,6 +127,9 @@ Relevant cue-shaping settings:
 - `Max cue words`: target maximum words per generated cue.
 - `Max cue duration seconds`: target maximum cue display duration.
 - `Regroup split gap seconds`: pause length that encourages splitting speech into separate cues.
+- `Polish buffered captions with OpenAI`: optionally cleans buffered live captions after enough lookahead exists. Live caption generation does not require OpenAI.
+- `OpenAI polish lookahead seconds`: minimum generated-caption buffer ahead of playback before polishing starts.
+- `OpenAI polish window seconds`: maximum caption span sent to OpenAI in one pass.
 
 These settings affect newly generated or regenerated caption chunks. Cached chunks are reused until the cache key changes or the cache is cleared.
 
@@ -142,8 +145,6 @@ Relevant plugin settings:
 - `Remote worker URL`: worker base URL, for example `http://192.0.2.10:8765`.
 - `Remote worker API key`: optional bearer token for protected workers.
 - `Remote worker model`: model requested from the worker, for example `large-v3`.
-- `Use local punctuation model`: asks the worker to restore punctuation locally after Whisper transcription.
-- `Local punctuation model`: Hugging Face punctuation model requested from the worker. Defaults to `oliverguhr/fullstop-punctuation-multilang-large`.
 - `Fallback to local when unavailable`: uses the local resident/per-job worker if the remote worker cannot be reached before a job starts.
 
 Remote jobs that start and then fail are treated as generation failures. That avoids silently restarting a long failed remote job on the weaker Jellyfin server.

@@ -68,16 +68,6 @@ public class PluginConfiguration : BasePluginConfiguration
     public string RemoteWorkerModel { get; set; } = "large-v3";
 
     /// <summary>
-    /// Gets or sets a value indicating whether the remote worker should restore punctuation with a local model.
-    /// </summary>
-    public bool EnableLocalPunctuation { get; set; } = true;
-
-    /// <summary>
-    /// Gets or sets the local punctuation restoration model requested from the remote worker.
-    /// </summary>
-    public string LocalPunctuationModel { get; set; } = "oliverguhr/fullstop-punctuation-multilang-large";
-
-    /// <summary>
     /// Gets or sets a value indicating whether local transcription should be used when the remote worker is unavailable before a job starts.
     /// </summary>
     public bool RemoteWorkerFallbackToLocal { get; set; } = true;
@@ -121,6 +111,31 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the target generated-caption lookahead in seconds.
     /// </summary>
     public int LookaheadSeconds { get; set; } = 90;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether buffered live captions should be polished with OpenAI.
+    /// </summary>
+    public bool EnableOpenAiCaptionPolish { get; set; }
+
+    /// <summary>
+    /// Gets or sets the OpenAI API key used for optional caption polishing.
+    /// </summary>
+    public string OpenAiApiKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the OpenAI model used for optional caption polishing.
+    /// </summary>
+    public string OpenAiCaptionPolishModel { get; set; } = "gpt-5.4-mini";
+
+    /// <summary>
+    /// Gets or sets the generated-caption lookahead required before OpenAI polishing starts.
+    /// </summary>
+    public int OpenAiPolishLookaheadSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Gets or sets the buffered caption window sent to OpenAI for each polish pass.
+    /// </summary>
+    public int OpenAiPolishWindowSeconds { get; set; } = 180;
 
     /// <summary>
     /// Gets or sets the Roku/client polling interval in seconds.
