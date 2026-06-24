@@ -33,11 +33,51 @@
       },
       {
         "version": "0.1.3.0",
-        "changelog": "Bump plugin assembly version after 0.1.2 release",
+        "changelog": "Add per-item generated subtitle cache clearing",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.3.zip",
-        "checksum": "7d69730d53d4a6df0cfa4f85f1878a04",
-        "timestamp": "2026-06-20T02:56:58Z"
+        "checksum": "3f093d2711953d54555abf954874b051",
+        "timestamp": "2026-06-22T00:29:52Z"
+      },
+      {
+        "version": "0.1.4.0",
+        "changelog": "Add client-controlled OpenAI polish and bounded polished cues",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.4.zip",
+        "checksum": "6c06b77b7a0600846942cb4adfecaac4",
+        "timestamp": "2026-06-22T02:42:59Z"
+      },
+      {
+        "version": "0.1.5.0",
+        "changelog": "Keep generated captions uncensored and preserve explicit language",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.5.zip",
+        "checksum": "a37dc2841b55b2ceaa3601ffc12eb07e",
+        "timestamp": "2026-06-22T04:38:55Z"
+      },
+      {
+        "version": "0.1.6.0",
+        "changelog": "Remove Whisper profanity prompt leakage while keeping OpenAI uncensored polish",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.6.zip",
+        "checksum": "6d084c1f85b131411016ee771fe7943d",
+        "timestamp": "2026-06-22T04:57:32Z"
+      },
+      {
+        "version": "0.1.7.0",
+        "changelog": "Align OpenAI subtitle splitting prompt with backend cue word limit",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.7.zip",
+        "checksum": "28e6ced2fe502c9132e881931d81db54",
+        "timestamp": "2026-06-22T05:03:13Z"
+      },
+      {
+        "version": "0.1.8.0",
+        "changelog": "Add future-safe cue-group OpenAI polish",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.8.zip",
+        "checksum": "252528fde460e4129f224bf4ac04662e",
+        "timestamp": "2026-06-24T02:43:58Z"
       }
     ]
   }

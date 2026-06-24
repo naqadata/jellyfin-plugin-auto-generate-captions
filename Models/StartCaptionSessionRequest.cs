@@ -31,6 +31,12 @@ public class StartCaptionSessionRequest
     public string? Language { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether server-side OpenAI caption polishing should be used for this session.
+    /// Null uses the server configuration default.
+    /// </summary>
+    public bool? EnableOpenAiPolish { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the worker should continue filling the cache after playback stops.
     /// </summary>
     public bool ContinueAfterPlaybackStops { get; set; }

@@ -147,7 +147,17 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishWindowSeconds">OpenAI polish window seconds</label>
                         <input id="OpenAiPolishWindowSeconds" name="OpenAiPolishWindowSeconds" type="number" is="emby-input" min="30" max="1800" />
-                        <div class="fieldDescription">Maximum caption span sent in one polishing pass.</div>
+                        <div class="fieldDescription">Legacy maximum caption span for older polish cache fingerprints.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishGuardBandSeconds">OpenAI polish guard band seconds</label>
+                        <input id="OpenAiPolishGuardBandSeconds" name="OpenAiPolishGuardBandSeconds" type="number" is="emby-input" min="0" max="60" />
+                        <div class="fieldDescription">Minimum distance ahead of playback before a cue can be replaced by polished text.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishCueCount">OpenAI polish cue count</label>
+                        <input id="OpenAiPolishCueCount" name="OpenAiPolishCueCount" type="number" is="emby-input" min="2" max="80" />
+                        <div class="fieldDescription">Target number of future-safe cues to send in one polishing pass.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PollSeconds">Client poll seconds</label>
@@ -270,6 +280,8 @@
                         document.querySelector('#OpenAiCaptionPolishModel').value = config.OpenAiCaptionPolishModel || 'gpt-5.4-mini';
                         document.querySelector('#OpenAiPolishLookaheadSeconds').value = config.OpenAiPolishLookaheadSeconds || 60;
                         document.querySelector('#OpenAiPolishWindowSeconds').value = config.OpenAiPolishWindowSeconds || 180;
+                        document.querySelector('#OpenAiPolishGuardBandSeconds').value = configValue(config, 'OpenAiPolishGuardBandSeconds', 10);
+                        document.querySelector('#OpenAiPolishCueCount').value = configValue(config, 'OpenAiPolishCueCount', 16);
                         document.querySelector('#PollSeconds').value = config.PollSeconds || 2;
                         document.querySelector('#MaxConcurrentSessions').value = config.MaxConcurrentSessions || 1;
                         document.querySelector('#VadThreshold').value = configValue(config, 'VadThreshold', 0.35);
@@ -316,6 +328,8 @@
                         config.OpenAiCaptionPolishModel = document.querySelector('#OpenAiCaptionPolishModel').value.trim() || 'gpt-5.4-mini';
                         config.OpenAiPolishLookaheadSeconds = numberValue('#OpenAiPolishLookaheadSeconds', '60');
                         config.OpenAiPolishWindowSeconds = numberValue('#OpenAiPolishWindowSeconds', '180');
+                        config.OpenAiPolishGuardBandSeconds = numberValue('#OpenAiPolishGuardBandSeconds', '10');
+                        config.OpenAiPolishCueCount = numberValue('#OpenAiPolishCueCount', '16');
                         config.PollSeconds = numberValue('#PollSeconds', '2');
                         config.MaxConcurrentSessions = numberValue('#MaxConcurrentSessions', '1');
                         config.VadThreshold = decimalValue('#VadThreshold', '0.35');

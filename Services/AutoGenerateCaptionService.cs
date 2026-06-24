@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 13;
+    private const int GenerationPipelineVersion = 18;
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -81,6 +81,7 @@ public class AutoGenerateCaptionService
             MediaSourceId = request.MediaSourceId,
             AudioStreamIndex = request.AudioStreamIndex,
             Language = language,
+            EnableOpenAiPolish = request.EnableOpenAiPolish ?? config.EnableOpenAiCaptionPolish,
             Status = CaptionSessionStatuses.WarmingUp,
             PollSeconds = Math.Clamp(config.PollSeconds, 1, 30),
             StartPositionTicks = Math.Max(0, request.PositionTicks),
@@ -99,7 +100,7 @@ public class AutoGenerateCaptionService
             state.Language);
 
         _logger.LogInformation(
-            "Auto-caption worker policy for session {SessionId}: generationPipelineVersion={GenerationPipelineVersion}; primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteWorkerFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; chunkOverlapSeconds={ChunkOverlapSeconds}; lookaheadSeconds={LookaheadSeconds}; openAiCaptionPolish={OpenAiCaptionPolish}; openAiPolishModel={OpenAiPolishModel}; openAiPolishLookaheadSeconds={OpenAiPolishLookaheadSeconds}; openAiPolishWindowSeconds={OpenAiPolishWindowSeconds}; vadThreshold={VadThreshold}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}; promotableModels={PromotableModels}",
+            "Auto-caption worker policy for session {SessionId}: generationPipelineVersion={GenerationPipelineVersion}; primaryModel={PrimaryModel}; fallbackModel={FallbackModel}; preferredBackend={PreferredBackend}; allowCpuFallback={AllowCpuFallback}; remoteEnabled={RemoteEnabled}; remoteWorkerUrl={RemoteWorkerUrl}; remoteWorkerModel={RemoteWorkerModel}; remoteFallbackToLocal={RemoteWorkerFallbackToLocal}; initialChunkSeconds={InitialChunkSeconds}; chunkSeconds={ChunkSeconds}; chunkOverlapSeconds={ChunkOverlapSeconds}; lookaheadSeconds={LookaheadSeconds}; openAiCaptionPolish={OpenAiCaptionPolish}; openAiPolishModel={OpenAiPolishModel}; openAiPolishLookaheadSeconds={OpenAiPolishLookaheadSeconds}; openAiPolishWindowSeconds={OpenAiPolishWindowSeconds}; openAiPolishGuardBandSeconds={OpenAiPolishGuardBandSeconds}; openAiPolishCueCount={OpenAiPolishCueCount}; vadThreshold={VadThreshold}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}; cachePartialResults={CachePartialResults}; promoteCompletedSubtitles={PromoteCompletedSubtitles}; promotableModels={PromotableModels}",
             sessionId,
             GenerationPipelineVersion,
             config.PrimaryModel,
@@ -118,6 +119,8 @@ public class AutoGenerateCaptionService
             GetOpenAiCaptionPolishModel(config),
             config.OpenAiPolishLookaheadSeconds,
             config.OpenAiPolishWindowSeconds,
+            config.OpenAiPolishGuardBandSeconds,
+            config.OpenAiPolishCueCount,
             config.VadThreshold,
             config.EnableRegrouping,
             config.RegroupSplitGapSeconds,
@@ -167,6 +170,89 @@ public class AutoGenerateCaptionService
         state.Cancellation.Cancel();
         _logger.LogInformation("Stopped auto-caption session {SessionId}", sessionId);
         return ToStatusDto(state);
+    }
+
+    /// <summary>
+    /// Gets client-facing plugin capabilities.
+    /// </summary>
+    /// <returns>Capability flags.</returns>
+    public object GetCapabilities()
+    {
+        PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        return new
+        {
+            OpenAiCaptionPolishAvailable = IsOpenAiCaptionPolishConfigured(config)
+        };
+    }
+
+    /// <summary>
+    /// Clears persistent generated caption cache entries for a video item.
+    /// </summary>
+    /// <param name="video">The video item.</param>
+    /// <param name="mediaSourceId">Optional media source id to match older untagged cache entries.</param>
+    /// <param name="audioStreamIndex">Optional audio stream index to match older untagged cache entries.</param>
+    /// <param name="language">Optional generated caption language to match older untagged cache entries.</param>
+    /// <returns>The number of cache directories deleted.</returns>
+    public int ClearItemCache(Video video, string? mediaSourceId = null, int? audioStreamIndex = null, string? language = null)
+    {
+        ArgumentNullException.ThrowIfNull(video);
+
+        foreach (CaptionSessionState activeState in _sessions.Values.Where(i => i.ItemId == video.Id))
+        {
+            activeState.Status = CaptionSessionStatuses.Stopped;
+            activeState.Message = "Session stopped because the generated caption cache was cleared.";
+            activeState.StoppedAt = DateTimeOffset.UtcNow;
+            activeState.Cancellation.Cancel();
+        }
+
+        PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        string cacheRoot = GetCacheRoot(config);
+        string mediaCacheRoot = Path.Combine(cacheRoot, "media");
+        if (!Directory.Exists(mediaCacheRoot))
+        {
+            _logger.LogInformation("Auto-caption cache clear requested for {ItemName}, but media cache root does not exist: {CacheRoot}", GetDisplayName(video), mediaCacheRoot);
+            return 0;
+        }
+
+        HashSet<string> directoriesToDelete = new(StringComparer.OrdinalIgnoreCase);
+        foreach (CaptionSessionState probeState in GetCacheProbeStates(video, config, mediaSourceId, audioStreamIndex, language))
+        {
+            string currentDirectory = GetPersistentCacheDirectory(probeState, config, cacheRoot);
+            if (Directory.Exists(currentDirectory))
+            {
+                directoriesToDelete.Add(currentDirectory);
+            }
+        }
+
+        foreach (string directory in Directory.EnumerateDirectories(mediaCacheRoot))
+        {
+            if (IsCacheDirectoryForItem(directory, video.Id))
+            {
+                directoriesToDelete.Add(directory);
+            }
+        }
+
+        int deleted = 0;
+        foreach (string directory in directoriesToDelete)
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+                deleted++;
+                _logger.LogInformation("Deleted auto-caption cache directory for item {ItemId}: {CacheDirectory}", video.Id, directory);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete auto-caption cache directory for item {ItemId}: {CacheDirectory}", video.Id, directory);
+            }
+        }
+
+        _logger.LogInformation(
+            "Auto-caption cache clear completed for {ItemName}: itemId={ItemId}; deletedDirectories={DeletedDirectories}",
+            GetDisplayName(video),
+            video.Id,
+            deleted);
+        return deleted;
     }
 
     /// <summary>
@@ -296,6 +382,7 @@ public class AutoGenerateCaptionService
         if (persistentCacheDirectory is not null)
         {
             Directory.CreateDirectory(persistentCacheDirectory);
+            WriteCacheMetadata(state, persistentCacheDirectory);
             _logger.LogInformation(
                 "Auto-caption persistent cache enabled for session {SessionId}: cacheKey={CacheKey}; directory={CacheDirectory}",
                 state.SessionId,
@@ -838,12 +925,14 @@ public class AutoGenerateCaptionService
         string? persistentCacheDirectory,
         string model)
     {
-        if (!IsOpenAiCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
+        if (!state.EnableOpenAiPolish || !IsOpenAiCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
         {
             return;
         }
 
         int requiredLookaheadSeconds = Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600);
+        int guardBandSeconds = Math.Clamp(config.OpenAiPolishGuardBandSeconds, 0, 60);
+        int polishCueCount = Math.Clamp(config.OpenAiPolishCueCount, 2, 80);
         long requiredLookaheadTicks = TimeSpan.FromSeconds(requiredLookaheadSeconds).Ticks;
         long clientPositionTicks = state.LastClientPositionTicks;
         long generatedThroughTicks = state.GeneratedThroughTicks;
@@ -852,15 +941,16 @@ public class AutoGenerateCaptionService
             return;
         }
 
-        int windowSeconds = Math.Clamp(config.OpenAiPolishWindowSeconds, requiredLookaheadSeconds, 1800);
-        long windowStartTicks = Math.Max(clientPositionTicks, state.LastOpenAiPolishedThroughTicks);
-        long windowEndTicks = Math.Min(generatedThroughTicks, windowStartTicks + TimeSpan.FromSeconds(windowSeconds).Ticks);
-        if (windowEndTicks <= windowStartTicks)
+        long safeStartTicks = clientPositionTicks + TimeSpan.FromSeconds(guardBandSeconds).Ticks;
+        long minimumStartTicks = Math.Max(safeStartTicks, state.LastOpenAiPolishedThroughTicks);
+        if (generatedThroughTicks <= minimumStartTicks)
         {
             return;
         }
 
         List<CaptionCue> cues;
+        long polishStartTicks;
+        long polishEndTicks;
         lock (state.SyncRoot)
         {
             if (state.OpenAiPolishRunning)
@@ -869,15 +959,18 @@ public class AutoGenerateCaptionService
             }
 
             cues = state.Cues
-                .Where(i => i.EndTicks > windowStartTicks && i.StartTicks < windowEndTicks)
+                .Where(i => i.StartTicks >= minimumStartTicks && i.EndTicks <= generatedThroughTicks)
                 .OrderBy(i => i.StartTicks)
                 .ThenBy(i => i.EndTicks)
+                .Take(polishCueCount)
                 .ToList();
             if (cues.Count < 2)
             {
                 return;
             }
 
+            polishStartTicks = cues[0].StartTicks;
+            polishEndTicks = cues[^1].EndTicks;
             state.OpenAiPolishRunning = true;
         }
 
@@ -887,8 +980,8 @@ public class AutoGenerateCaptionService
                 state.SessionId,
                 config,
                 cues,
-                windowStartTicks,
-                windowEndTicks,
+                polishStartTicks,
+                polishEndTicks,
                 state.Cancellation.Token).ConfigureAwait(false);
 
             if (polished.Count == 0)
@@ -896,10 +989,16 @@ public class AutoGenerateCaptionService
                 return;
             }
 
+            polished = ShapePolishedCues(polished, cues, config, polishStartTicks, polishEndTicks);
+            if (polished.Count == 0)
+            {
+                return;
+            }
+
             lock (state.SyncRoot)
             {
-                MergeChunkCues(state.Cues, polished, windowStartTicks, windowEndTicks);
-                state.LastOpenAiPolishedThroughTicks = Math.Max(state.LastOpenAiPolishedThroughTicks, windowEndTicks);
+                MergeChunkCues(state.Cues, polished, polishStartTicks, polishEndTicks);
+                state.LastOpenAiPolishedThroughTicks = Math.Max(state.LastOpenAiPolishedThroughTicks, polishEndTicks);
             }
 
             if (persistentCacheDirectory is not null)
@@ -908,13 +1007,14 @@ public class AutoGenerateCaptionService
             }
 
             _logger.LogInformation(
-                "Auto-caption OpenAI polish applied for session {SessionId}: model={Model}; inputCues={InputCueCount}; outputCues={OutputCueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
+                "Auto-caption OpenAI polish applied for session {SessionId}: model={Model}; inputCues={InputCueCount}; outputCues={OutputCueCount}; guardBandSeconds={GuardBandSeconds}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
                 state.SessionId,
                 GetOpenAiCaptionPolishModel(config),
                 cues.Count,
                 polished.Count,
-                windowStartTicks,
-                windowEndTicks);
+                guardBandSeconds,
+                polishStartTicks,
+                polishEndTicks);
         }
         catch (OperationCanceledException) when (state.Cancellation.IsCancellationRequested)
         {
@@ -927,8 +1027,8 @@ public class AutoGenerateCaptionService
                 "Auto-caption OpenAI polish failed for session {SessionId}: model={Model}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}. Keeping original captions.",
                 state.SessionId,
                 GetOpenAiCaptionPolishModel(config),
-                windowStartTicks,
-                windowEndTicks);
+                polishStartTicks,
+                polishEndTicks);
         }
         finally
         {
@@ -947,6 +1047,7 @@ public class AutoGenerateCaptionService
         long windowEndTicks,
         CancellationToken cancellationToken)
     {
+        int maxCueWords = Math.Clamp(config.MaxCueWords, 3, 40);
         var request = new
         {
             model = GetOpenAiCaptionPolishModel(config),
@@ -960,7 +1061,7 @@ public class AutoGenerateCaptionService
                         new
                         {
                             type = "input_text",
-                            text = "Clean up auto-generated subtitle cues. Keep wording faithful. Prefer sentence-level cues when timing allows. Split multiple sentences into separate cues. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only cues inside the provided time range."
+                            text = BuildOpenAiCaptionPolishPrompt(maxCueWords)
                         }
                     }
                 },
@@ -1068,6 +1169,13 @@ public class AutoGenerateCaptionService
         return polished;
     }
 
+    private static string BuildOpenAiCaptionPolishPrompt(int maxCueWords)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"Clean up a future-safe group of auto-generated subtitle cues. Keep wording faithful. Improve punctuation, capitalization, and sentence flow. You may move words between neighboring cues, split cues, or merge cues when it makes the sentence structure more coherent. Prefer sentence-level cues when timing allows, but split any sentence longer than {maxCueWords} words into natural sub-cues. Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated syllables requires it. Keep all returned cue timestamps inside the provided time range. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor, mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only cues inside the provided time range.");
+    }
+
     private static string ExtractOpenAiOutputText(string responseText)
     {
         using JsonDocument document = JsonDocument.Parse(responseText);
@@ -1148,6 +1256,148 @@ public class AutoGenerateCaptionService
         return output;
     }
 
+    private static IReadOnlyList<CaptionCue> ShapePolishedCues(
+        IReadOnlyList<CaptionCue> polished,
+        IReadOnlyList<CaptionCue> anchors,
+        PluginConfiguration config,
+        long windowStartTicks,
+        long windowEndTicks)
+    {
+        int maxCharacters = Math.Clamp(config.MaxCueCharacters, 20, 180);
+        int maxWords = Math.Clamp(config.MaxCueWords, 3, 40);
+        long maxDurationTicks = TimeSpan.FromSeconds(Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0)).Ticks;
+        var shaped = new List<CaptionCue>();
+
+        foreach (CaptionCue cue in polished.OrderBy(i => i.StartTicks).ThenBy(i => i.EndTicks))
+        {
+            IReadOnlyList<CaptionCue> cueAnchors = anchors
+                .Where(i => i.EndTicks > cue.StartTicks && i.StartTicks < cue.EndTicks)
+                .OrderBy(i => i.StartTicks)
+                .ThenBy(i => i.EndTicks)
+                .ToArray();
+
+            if (cueAnchors.Count == 0)
+            {
+                cueAnchors = [new CaptionCue(cue.Id + "-anchor", cue.StartTicks, cue.EndTicks, cue.Text)];
+            }
+
+            foreach (CaptionCue shapedCue in ShapeCueWithAnchors(cue, cueAnchors, maxCharacters, maxWords, maxDurationTicks, windowStartTicks, windowEndTicks))
+            {
+                shaped.Add(shapedCue);
+            }
+        }
+
+        return shaped
+            .OrderBy(i => i.StartTicks)
+            .ThenBy(i => i.EndTicks)
+            .Select((cue, index) => cue with { Id = string.Create(CultureInfo.InvariantCulture, $"openai-{index:000000}") })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CaptionCue> ShapeCueWithAnchors(
+        CaptionCue cue,
+        IReadOnlyList<CaptionCue> anchors,
+        int maxCharacters,
+        int maxWords,
+        long maxDurationTicks,
+        long windowStartTicks,
+        long windowEndTicks)
+    {
+        List<string> words = cue.Text
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (words.Count == 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<CaptionCue> spans = BuildTimingSpans(anchors, maxDurationTicks, windowStartTicks, windowEndTicks);
+        if (spans.Count == 0)
+        {
+            return [];
+        }
+
+        var output = new List<CaptionCue>();
+        int wordIndex = 0;
+        for (int spanIndex = 0; spanIndex < spans.Count && wordIndex < words.Count; spanIndex++)
+        {
+            CaptionCue span = spans[spanIndex];
+            int remainingSpans = spans.Count - spanIndex;
+            int remainingWords = words.Count - wordIndex;
+            int targetWords = (int)Math.Ceiling(remainingWords / (double)remainingSpans);
+            targetWords = Math.Clamp(targetWords, 1, maxWords);
+
+            int take = 0;
+            string text = string.Empty;
+            while (wordIndex + take < words.Count && take < targetWords)
+            {
+                string candidate = JoinWords(words, wordIndex, take + 1);
+                if (take > 0 && candidate.Length > maxCharacters)
+                {
+                    break;
+                }
+
+                text = candidate;
+                take++;
+            }
+
+            if (take == 0)
+            {
+                text = words[wordIndex];
+                take = 1;
+            }
+
+            output.Add(span with { Text = text });
+            wordIndex += take;
+        }
+
+        if (wordIndex < words.Count && output.Count > 0)
+        {
+            CaptionCue last = output[^1];
+            output[^1] = last with { Text = NormalizeCueText(last.Text + " " + JoinWords(words, wordIndex, words.Count - wordIndex)) };
+        }
+
+        return output;
+    }
+
+    private static IReadOnlyList<CaptionCue> BuildTimingSpans(
+        IReadOnlyList<CaptionCue> anchors,
+        long maxDurationTicks,
+        long windowStartTicks,
+        long windowEndTicks)
+    {
+        var spans = new List<CaptionCue>();
+        foreach (CaptionCue anchor in anchors)
+        {
+            long anchorStartTicks = Math.Clamp(anchor.StartTicks, windowStartTicks, windowEndTicks);
+            long anchorEndTicks = Math.Clamp(anchor.EndTicks, windowStartTicks, windowEndTicks);
+            if (anchorEndTicks <= anchorStartTicks)
+            {
+                continue;
+            }
+
+            long spanStartTicks = anchorStartTicks;
+            while (anchorEndTicks - spanStartTicks > maxDurationTicks)
+            {
+                long spanEndTicks = spanStartTicks + maxDurationTicks;
+                spans.Add(new CaptionCue(string.Empty, spanStartTicks, spanEndTicks, string.Empty));
+                spanStartTicks = spanEndTicks;
+            }
+
+            if (anchorEndTicks > spanStartTicks)
+            {
+                spans.Add(new CaptionCue(string.Empty, spanStartTicks, anchorEndTicks, string.Empty));
+            }
+        }
+
+        return spans;
+    }
+
+    private static string JoinWords(IReadOnlyList<string> words, int start, int count)
+    {
+        return NormalizeCueText(string.Join(' ', words.Skip(start).Take(count)));
+    }
+
     private void WriteCombinedCacheFromState(CaptionSessionState state, PluginConfiguration config, string persistentCacheDirectory, string model)
     {
         if (!IsPromotableModel(config, model))
@@ -1180,7 +1430,7 @@ public class AutoGenerateCaptionService
 
     private static bool IsOpenAiCaptionPolishConfigured(PluginConfiguration config)
     {
-        return config.EnableOpenAiCaptionPolish && !string.IsNullOrWhiteSpace(config.OpenAiApiKey);
+        return !string.IsNullOrWhiteSpace(config.OpenAiApiKey);
     }
 
     private static string GetOpenAiCaptionPolishModel(PluginConfiguration config)
@@ -1202,7 +1452,9 @@ public class AutoGenerateCaptionService
             "openai-polish:on",
             GetOpenAiCaptionPolishModel(config),
             Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600).ToString(CultureInfo.InvariantCulture),
-            Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture));
+            Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.OpenAiPolishGuardBandSeconds, 0, 60).ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.OpenAiPolishCueCount, 2, 80).ToString(CultureInfo.InvariantCulture));
     }
 
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, double chunkSeconds, string audioPath)
@@ -1458,6 +1710,92 @@ public class AutoGenerateCaptionService
         return fallback;
     }
 
+    private static IEnumerable<CaptionSessionState> GetCacheProbeStates(
+        Video video,
+        PluginConfiguration config,
+        string? mediaSourceId,
+        int? audioStreamIndex,
+        string? language)
+    {
+        string normalizedLanguage = string.IsNullOrWhiteSpace(language)
+            ? config.DefaultLanguage
+            : language.Trim();
+
+        foreach (bool enableOpenAiPolish in new[] { true, false })
+        {
+            yield return new CaptionSessionState
+            {
+                SessionId = Guid.Empty,
+                ItemId = video.Id,
+                ItemName = GetDisplayName(video),
+                MediaPath = video.Path,
+                MediaSourceId = mediaSourceId,
+                AudioStreamIndex = audioStreamIndex ?? 0,
+                Language = normalizedLanguage,
+                EnableOpenAiPolish = enableOpenAiPolish
+            };
+
+            if (!string.Equals(normalizedLanguage, config.DefaultLanguage, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return new CaptionSessionState
+                {
+                    SessionId = Guid.Empty,
+                    ItemId = video.Id,
+                    ItemName = GetDisplayName(video),
+                    MediaPath = video.Path,
+                    MediaSourceId = mediaSourceId,
+                    AudioStreamIndex = audioStreamIndex ?? 0,
+                    Language = config.DefaultLanguage,
+                    EnableOpenAiPolish = enableOpenAiPolish
+                };
+            }
+        }
+    }
+
+    private static void WriteCacheMetadata(CaptionSessionState state, string persistentCacheDirectory)
+    {
+        try
+        {
+            var metadata = new CaptionCacheMetadata
+            {
+                ItemId = state.ItemId,
+                MediaPath = state.MediaPath,
+                MediaSourceId = state.MediaSourceId,
+                AudioStreamIndex = state.AudioStreamIndex,
+                Language = state.Language,
+                EnableOpenAiPolish = state.EnableOpenAiPolish,
+                CacheKey = state.CacheKey,
+                CreatedAtUtc = DateTimeOffset.UtcNow
+            };
+
+            string metadataPath = Path.Combine(persistentCacheDirectory, "metadata.json");
+            File.WriteAllText(metadataPath, JsonSerializer.Serialize(metadata, JsonOptions));
+        }
+        catch
+        {
+            // Cache metadata is best-effort; generation can continue without it.
+        }
+    }
+
+    private static bool IsCacheDirectoryForItem(string directory, Guid itemId)
+    {
+        string metadataPath = Path.Combine(directory, "metadata.json");
+        if (!File.Exists(metadataPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            CaptionCacheMetadata? metadata = JsonSerializer.Deserialize<CaptionCacheMetadata>(File.ReadAllText(metadataPath), JsonOptions);
+            return metadata?.ItemId == itemId;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string GetPersistentCacheDirectory(CaptionSessionState state, PluginConfiguration config, string cacheRoot)
     {
         string fingerprint = GetMediaFingerprint(state.MediaPath);
@@ -1468,6 +1806,7 @@ public class AutoGenerateCaptionService
             state.MediaSourceId ?? string.Empty,
             state.AudioStreamIndex.ToString(CultureInfo.InvariantCulture),
             state.Language,
+            state.EnableOpenAiPolish.ToString(CultureInfo.InvariantCulture),
             config.PrimaryModel,
             config.FallbackModel,
             config.PreferredBackend,
@@ -1810,6 +2149,8 @@ public class AutoGenerateCaptionService
 
         public string Language { get; init; } = "auto";
 
+        public bool EnableOpenAiPolish { get; init; }
+
         public string Status { get; set; } = CaptionSessionStatuses.WarmingUp;
 
         public int PollSeconds { get; init; }
@@ -1844,6 +2185,25 @@ public class AutoGenerateCaptionService
     private sealed record CaptionCue(string Id, long StartTicks, long EndTicks, string Text);
 
     private sealed record CacheFileRange(string Path, long StartTicks, long EndTicks);
+
+    private sealed class CaptionCacheMetadata
+    {
+        public Guid ItemId { get; set; }
+
+        public string? MediaPath { get; set; }
+
+        public string? MediaSourceId { get; set; }
+
+        public int AudioStreamIndex { get; set; }
+
+        public string Language { get; set; } = "auto";
+
+        public bool EnableOpenAiPolish { get; set; }
+
+        public string? CacheKey { get; set; }
+
+        public DateTimeOffset CreatedAtUtc { get; set; }
+    }
 
     private sealed record TranscriptionResult(string Model);
 

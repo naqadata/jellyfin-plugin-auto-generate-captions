@@ -138,6 +138,16 @@ public class PluginConfiguration : BasePluginConfiguration
     public int OpenAiPolishWindowSeconds { get; set; } = 180;
 
     /// <summary>
+    /// Gets or sets how far ahead of playback cues must be before OpenAI may replace them.
+    /// </summary>
+    public int OpenAiPolishGuardBandSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Gets or sets the target number of cues sent to OpenAI for each polish pass.
+    /// </summary>
+    public int OpenAiPolishCueCount { get; set; } = 16;
+
+    /// <summary>
     /// Gets or sets the Roku/client polling interval in seconds.
     /// </summary>
     public int PollSeconds { get; set; } = 2;

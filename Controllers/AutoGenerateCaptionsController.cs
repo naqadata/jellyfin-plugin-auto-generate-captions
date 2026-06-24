@@ -50,6 +50,45 @@ public class AutoGenerateCaptionsController : ControllerBase
     }
 
     /// <summary>
+    /// Gets Auto Generate Captions client-facing capabilities.
+    /// </summary>
+    /// <returns>Capability flags.</returns>
+    [HttpGet("Capabilities")]
+    public ActionResult<object> GetCapabilities()
+    {
+        return Ok(_captionService.GetCapabilities());
+    }
+
+    /// <summary>
+    /// Clears generated caption cache entries for an item.
+    /// </summary>
+    /// <param name="itemId">Video item id.</param>
+    /// <param name="mediaSourceId">Optional media source id to match older untagged cache entries.</param>
+    /// <param name="audioStreamIndex">Optional audio stream index to match older untagged cache entries.</param>
+    /// <param name="language">Optional generated caption language to match older untagged cache entries.</param>
+    /// <returns>Clear result.</returns>
+    [HttpPost("Items/{itemId}/Cache/Clear")]
+    public ActionResult<object> ClearItemCache(
+        Guid itemId,
+        [FromQuery] string? mediaSourceId,
+        [FromQuery] int? audioStreamIndex,
+        [FromQuery] string? language)
+    {
+        BaseItem? item = _libraryManager.GetItemById(itemId);
+        if (item is not Video video)
+        {
+            return NotFound();
+        }
+
+        int deletedDirectories = _captionService.ClearItemCache(video, mediaSourceId, audioStreamIndex, language);
+        return Ok(new
+        {
+            ItemId = itemId,
+            DeletedDirectories = deletedDirectories
+        });
+    }
+
+    /// <summary>
     /// Gets a caption session status.
     /// </summary>
     /// <param name="sessionId">Caption session id.</param>
