@@ -8,7 +8,7 @@ The goal is not to scan the whole library. A custom client starts a short-lived 
 
 - [Naqafin for Roku](https://github.com/naqadata/naqafin-roku): Roku client that exposes the `Auto-Generated` subtitle option and consumes this plugin's live WebVTT endpoint.
 - [Naqafin Caption Worker](https://github.com/naqadata/naqafin-caption-worker): optional Dockerized CUDA worker that can run larger Whisper models on a separate GPU host.
-- [Jellyfin Plugin Playlist Up Next](https://github.com/naqadata/jellyfin-plugin-playlist-up-next): separate companion server plugin used by Naqafin for playlist-aware resume rows.
+- [Jellyfin Plugin Playlist Up Next](https://github.com/naqadata/jellyfin-plugin-playlist-up-next): separate companion server plugin used by Naqafin for playlist-aware Continue Watching and Next Up content.
 
 ## Client Support
 
@@ -21,8 +21,10 @@ Stock Jellyfin clients do not currently know how to start these caption sessions
 This first implementation provides:
 
 - Plugin configuration page.
+- Capability endpoint so clients can gate optional generated-caption controls.
 - Session start/status/stop endpoints.
 - A live `.vtt` endpoint that returns valid WebVTT.
+- Per-item cache clear endpoint.
 - In-memory session state.
 - First-chunk ffmpeg audio extraction.
 - A bundled Python `stable_whisper` worker with backend/model logging.
@@ -86,6 +88,18 @@ Stop:
 POST /AutoGenerateCaptions/Sessions/{sessionId}/Stop
 ```
 
+Check server-advertised optional capabilities:
+
+```http
+GET /AutoGenerateCaptions/Capabilities
+```
+
+Clear generated-caption cache for an item:
+
+```http
+POST /AutoGenerateCaptions/Items/{itemId}/Cache/Clear
+```
+
 ## Naqafin Integration Sketch
 
 The matching Roku client is [Naqafin for Roku](https://github.com/naqadata/naqafin-roku).
@@ -98,11 +112,13 @@ In this workspace, the corresponding development checkout is usually at:
 
 Client behavior:
 
-1. Add an `Auto-Generated` entry to the subtitle menu.
-2. On selection, call `POST /AutoGenerateCaptions/Items/{itemId}/Sessions`.
-3. Set the custom caption task URL to the returned `liveVttUrl`.
-4. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
-5. Call the stop endpoint when playback exits or the user disables auto-generated captions.
+1. Load the server plugin list and show generated-caption UI only when this plugin is available.
+2. Add an `Auto-Generated` entry to the subtitle menu.
+3. On selection, call `POST /AutoGenerateCaptions/Items/{itemId}/Sessions`.
+4. Set the custom caption task URL to the returned `liveVttUrl`.
+5. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
+6. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
+7. Call the stop endpoint when playback exits or the user disables auto-generated captions.
 
 ## Worker Design
 
