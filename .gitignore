@@ -12,3 +12,5 @@ dist/*
 !dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.6.zip
 !dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.7.zip
 !dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.8.zip
+!dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.9.zip
+!dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.10.zip

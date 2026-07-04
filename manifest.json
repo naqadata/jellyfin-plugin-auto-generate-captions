@@ -78,6 +78,22 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.8.zip",
         "checksum": "252528fde460e4129f224bf4ac04662e",
         "timestamp": "2026-06-24T02:43:58Z"
+      },
+      {
+        "version": "0.1.9.0",
+        "changelog": "Use direct OpenAI cue boundaries for caption polish",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.9.zip",
+        "checksum": "8b2fc14bacf93cac8668349d1426848b",
+        "timestamp": "2026-06-24T04:45:00Z"
+      },
+      {
+        "version": "0.1.10.0",
+        "changelog": "Balance long OpenAI-polished subtitle cues",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.10.zip",
+        "checksum": "2a89198dc703725894160ca10d5ac597",
+        "timestamp": "2026-06-24T05:12:14Z"
       }
     ]
   }

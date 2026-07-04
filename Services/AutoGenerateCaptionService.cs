@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 18;
+    private const int GenerationPipelineVersion = 20;
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -989,12 +989,6 @@ public class AutoGenerateCaptionService
                 return;
             }
 
-            polished = ShapePolishedCues(polished, cues, config, polishStartTicks, polishEndTicks);
-            if (polished.Count == 0)
-            {
-                return;
-            }
-
             lock (state.SyncRoot)
             {
                 MergeChunkCues(state.Cues, polished, polishStartTicks, polishEndTicks);
@@ -1047,7 +1041,7 @@ public class AutoGenerateCaptionService
         long windowEndTicks,
         CancellationToken cancellationToken)
     {
-        int maxCueWords = Math.Clamp(config.MaxCueWords, 3, 40);
+        int maxCueWords = Math.Clamp(Math.Max(config.MaxCueWords, 12), 3, 40);
         var request = new
         {
             model = GetOpenAiCaptionPolishModel(config),
@@ -1173,7 +1167,7 @@ public class AutoGenerateCaptionService
     {
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"Clean up a future-safe group of auto-generated subtitle cues. Keep wording faithful. Improve punctuation, capitalization, and sentence flow. You may move words between neighboring cues, split cues, or merge cues when it makes the sentence structure more coherent. Prefer sentence-level cues when timing allows, but split any sentence longer than {maxCueWords} words into natural sub-cues. Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated syllables requires it. Keep all returned cue timestamps inside the provided time range. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor, mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only cues inside the provided time range.");
+            $"Clean up a future-safe group of auto-generated subtitle cues. Keep wording faithful. Improve punctuation, capitalization, and sentence flow. You may move words between neighboring cues, split cues, or merge cues when it makes the sentence structure more coherent. Prefer cue boundaries at sentence boundaries, clause boundaries, or natural speech pauses. Do not leave one- or two-word fragments at the beginning or end of a cue when they grammatically belong to a neighboring cue. If a cue begins with an orphaned conjunction, pronoun, article, preposition, or phrase that belongs to the previous sentence, move it to the previous cue when timing allows. If a cue ends with the first word or phrase of the next sentence, move it to the next cue when timing allows. Prefer sentence-level cues when timing allows. Hard rule: if a cue would contain more than {maxCueWords} words, split it into two or more consecutive cues with roughly even word counts, preserving phrase boundaries and natural pauses. Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated syllables requires it. Adjust returned cue timestamps within the provided time range to match natural cue boundaries; when splitting a long cue, divide its time range proportionally across the new cues. Keep all returned cue timestamps inside the provided time range. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor, mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only cues inside the provided time range.");
     }
 
     private static string ExtractOpenAiOutputText(string responseText)
@@ -1450,6 +1444,8 @@ public class AutoGenerateCaptionService
         return string.Join(
             '|',
             "openai-polish:on",
+            "direct-openai-cues:v1",
+            "balanced-long-cues:v1",
             GetOpenAiCaptionPolishModel(config),
             Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture),
