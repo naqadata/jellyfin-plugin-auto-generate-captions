@@ -1,4 +1,4 @@
-# Jellyfin Plugin Auto Generate Captions
+# Jellyfin Plugin - Auto Generate Captions
 
 Experimental Jellyfin plugin for Roku-driven, on-demand AI caption generation.
 
