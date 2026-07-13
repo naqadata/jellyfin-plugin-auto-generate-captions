@@ -2,7 +2,7 @@
 
 Experimental Jellyfin plugin for Roku-driven, on-demand AI caption generation.
 
-The plugin supports two explicit client-selected modes: rolling Live captions around the playback position, and a Full background transcription that can add speaker labels. It does not automatically scan the library or trigger work for Next Up items.
+The plugin supports immediate rolling Live captions and an internal Full background pipeline used by Naqafin's Enhanced mode. Enhanced starts with Live captions, then switches to the completed speaker-labeled and polished VTT. It does not automatically scan the library or trigger work for Next Up items.
 
 ## Related Projects
 
@@ -38,6 +38,7 @@ The current implementation provides:
 - Explicit, low-priority full-item transcription through the remote worker.
 - Optional local worker diarization with WebVTT speaker voice tags.
 - Full-session status with real worker progress from 0-100%.
+- Atomic promotion of completed Full output as a normal `AI Generated (Enhanced)` external subtitle track backed by durable plugin-managed storage.
 
 ## API Contract
 
@@ -135,12 +136,12 @@ In this workspace, the corresponding development checkout is usually at:
 Client behavior:
 
 1. Load the server plugin list and show generated-caption UI only when this plugin is available.
-2. Add `AI Auto-Generated (Live)` and, when advertised by capabilities, `AI Auto-Generated (Full)` entries to the subtitle menu.
-3. For Live, call `POST /AutoGenerateCaptions/Items/{itemId}/Sessions`. For Full, call `POST /AutoGenerateCaptions/Items/{itemId}/Full`.
+2. Add `AI Captions - Live` and, when advertised by capabilities, `AI Captions - Enhanced` entries to the subtitle menu.
+3. For Enhanced, start Live and Full together, continue displaying Live while polling Full status, then switch to `enhancedVttUrl` when `enhancedReady` becomes true.
 4. Set the custom caption task URL to the returned `liveVttUrl`.
 5. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
 6. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
-7. Poll Full session status to show `progressPercent` in Subtitle Tools.
+7. Poll Full session status to show `Live - Enhancing <progressPercent>%` in Subtitle Tools.
 8. Call the stop endpoint when Live playback exits. Full jobs are background-owned and continue when playback pauses or exits.
 
 ## Worker Design
@@ -156,13 +157,13 @@ The worker should:
 - Reconcile only tightly bounded unlabeled fragments, then polish Full captions in immutable speaker groups; a rejected group keeps its original cues without blocking later groups.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
 - Keep chunk caches for all models, but only write stitched cache output when the model is listed in `Promotable models`.
-- External subtitle promotion is planned, but not implemented yet.
+- Atomically write successful Full output beneath Jellyfin's persistent data directory, register it immediately as an external `AI Generated (Enhanced)` subtitle track, and retain provenance alongside it.
 
 Relevant cache/promotion settings:
 
 - `Cache partial results`: keeps generated chunks so future sessions can reuse them.
-- `Promote completed subtitles`: reserved for future external subtitle promotion. Current builds write stitched cache VTTs for model-eligible sessions.
-- `Promotable models`: comma-separated model allowlist for stitched cache output now and external subtitle promotion later. Defaults to `large-v3, large-v3-turbo`; empty allows any model.
+- `Promote completed subtitles`: legacy setting retained for configuration compatibility; Enhanced Full output is promoted as part of the mode contract.
+- `Promotable models`: comma-separated model allowlist for stitched cache and Enhanced output. Defaults to `large-v3, large-v3-turbo`; empty allows any model.
 
 Relevant cue-shaping settings:
 

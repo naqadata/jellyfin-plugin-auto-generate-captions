@@ -223,12 +223,12 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool CachePartialResults { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets a value indicating whether completed subtitles should be saved next to media.
+    /// Gets or sets the legacy completed-subtitle promotion preference.
     /// </summary>
     public bool PromoteCompletedSubtitles { get; set; }
 
     /// <summary>
-    /// Gets or sets comma-separated model names that are considered good enough for stitched cache output and future external subtitle promotion.
+    /// Gets or sets comma-separated model names that are considered good enough for stitched cache and Enhanced output.
     /// Empty means any model is allowed.
     /// </summary>
     public string PromotableModels { get; set; } = "large-v3, large-v3-turbo";

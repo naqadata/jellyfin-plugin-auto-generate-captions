@@ -118,6 +118,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.3.1.zip",
         "checksum": "8f6853836d40ff797befbcff3a7f19d3",
         "timestamp": "2026-07-13T18:21:12Z"
+      },
+      {
+        "version": "0.4.0.0",
+        "changelog": "Enhanced hybrid captions with durable promoted subtitles",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.0.zip",
+        "checksum": "5aa218c3a1a006df55bae27ce8a4de27",
+        "timestamp": "2026-07-13T21:11:04Z"
       }
     ]
   }

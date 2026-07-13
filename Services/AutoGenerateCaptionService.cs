@@ -15,6 +15,8 @@ using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Persistence;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
@@ -25,7 +27,8 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 22;
+    private const int GenerationPipelineVersion = 23;
+    private const string EnhancedSubtitleTitle = "AI Generated (Enhanced)";
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
@@ -33,6 +36,7 @@ public class AutoGenerateCaptionService
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
     private readonly ConcurrentDictionary<string, Guid> _prefetchByCacheKey = new(StringComparer.Ordinal);
     private readonly IApplicationPaths _applicationPaths;
+    private readonly IMediaStreamRepository _mediaStreamRepository;
     private readonly ResidentWhisperWorker _residentWhisperWorker;
     private readonly RemoteCaptionWorkerClient _remoteCaptionWorkerClient;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
@@ -42,16 +46,19 @@ public class AutoGenerateCaptionService
     /// Initializes a new instance of the <see cref="AutoGenerateCaptionService"/> class.
     /// </summary>
     /// <param name="applicationPaths">Application paths.</param>
+    /// <param name="mediaStreamRepository">Jellyfin media stream repository.</param>
     /// <param name="residentWhisperWorker">Resident Whisper worker.</param>
     /// <param name="remoteCaptionWorkerClient">Remote caption worker client.</param>
     /// <param name="logger">Logger.</param>
     public AutoGenerateCaptionService(
         IApplicationPaths applicationPaths,
+        IMediaStreamRepository mediaStreamRepository,
         ResidentWhisperWorker residentWhisperWorker,
         RemoteCaptionWorkerClient remoteCaptionWorkerClient,
         ILogger<AutoGenerateCaptionService> logger)
     {
         _applicationPaths = applicationPaths;
+        _mediaStreamRepository = mediaStreamRepository;
         _residentWhisperWorker = residentWhisperWorker;
         _remoteCaptionWorkerClient = remoteCaptionWorkerClient;
         _logger = logger;
@@ -292,6 +299,7 @@ public class AutoGenerateCaptionService
         }
 
         PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        RemovePromotedEnhancedSubtitles(video);
         string cacheRoot = GetCacheRoot(config);
         string mediaCacheRoot = Path.Combine(cacheRoot, "media");
         if (!Directory.Exists(mediaCacheRoot))
@@ -439,7 +447,12 @@ public class AutoGenerateCaptionService
             Mode = state.Mode,
             ProgressPercent = state.ProgressPercent,
             IsDiarized = state.IsDiarized,
-            DurationTicks = state.DurationTicks
+            DurationTicks = state.DurationTicks,
+            EnhancedReady = state.EnhancedReady,
+            EnhancedDisplayTitle = state.EnhancedDisplayTitle,
+            EnhancedVttUrl = state.EnhancedReady
+                ? string.Create(CultureInfo.InvariantCulture, $"/AutoGenerateCaptions/{state.SessionId}/live.vtt")
+                : null
         };
     }
 
@@ -468,6 +481,9 @@ public class AutoGenerateCaptionService
             ProgressPercent = dto.ProgressPercent,
             IsDiarized = dto.IsDiarized,
             DurationTicks = dto.DurationTicks,
+            EnhancedReady = dto.EnhancedReady,
+            EnhancedDisplayTitle = dto.EnhancedDisplayTitle,
+            EnhancedVttUrl = dto.EnhancedVttUrl,
             Ranges = ranges,
             Message = state.Message
         };
@@ -647,6 +663,7 @@ public class AutoGenerateCaptionService
             if (completeRange is not null && File.Exists(GetCombinedVttPath(persistentCacheDirectory)))
             {
                 TryHydrateFromCombinedCache(state, config, persistentCacheDirectory);
+                await PromoteEnhancedSubtitleAsync(state, persistentCacheDirectory, config.RemoteWorkerModel).ConfigureAwait(false);
                 state.GeneratedThroughTicks = durationTicks;
                 state.ProgressPercent = 100;
                 state.Status = CaptionSessionStatuses.Cached;
@@ -724,6 +741,7 @@ public class AutoGenerateCaptionService
             }
 
             WriteChunkCache(state, persistentCacheDirectory, 0, 0, durationTicks, completedCues);
+            await PromoteEnhancedSubtitleAsync(state, persistentCacheDirectory, config.RemoteWorkerModel).ConfigureAwait(false);
 
             state.GeneratedThroughTicks = durationTicks;
             state.ProgressPercent = 100;
@@ -2988,6 +3006,175 @@ public class AutoGenerateCaptionService
         return cues;
     }
 
+    private Task PromoteEnhancedSubtitleAsync(
+        CaptionSessionState state,
+        string persistentCacheDirectory,
+        string model)
+    {
+        if (string.IsNullOrWhiteSpace(state.MediaPath))
+        {
+            throw new InvalidOperationException("Cannot promote Enhanced captions without a media path.");
+        }
+
+        string language = NormalizePromotedLanguage(state.Language);
+        string mediaBaseName = Path.GetFileNameWithoutExtension(state.MediaPath);
+        DirectoryInfo mediaCacheDirectory = new(persistentCacheDirectory);
+        string cacheRoot = mediaCacheDirectory.Parent?.Parent?.FullName
+            ?? throw new DirectoryNotFoundException("Cannot resolve the generated-caption cache root.");
+        string promotedDirectory = Path.Combine(cacheRoot, "promoted", state.ItemId.ToString("N"));
+        Directory.CreateDirectory(promotedDirectory);
+        string enhancedPath = Path.Combine(
+            promotedDirectory,
+            string.Create(CultureInfo.InvariantCulture, $"{mediaBaseName}.{EnhancedSubtitleTitle}.{language}.vtt"));
+        string temporaryPath = enhancedPath + ".tmp-" + state.SessionId.ToString("N");
+        List<CaptionCue> completedCues;
+        lock (state.SyncRoot)
+        {
+            completedCues = state.Cues
+                .OrderBy(i => i.StartTicks)
+                .ThenBy(i => i.EndTicks)
+                .ToList();
+        }
+
+        try
+        {
+            WriteVtt(temporaryPath, completedCues);
+            File.Move(temporaryPath, enhancedPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+
+        List<MediaStream> streams = _mediaStreamRepository
+            .GetMediaStreams(new MediaStreamQuery { ItemId = state.ItemId })
+            .ToList();
+        MediaStream? existing = streams.FirstOrDefault(i =>
+            i.Type == MediaStreamType.Subtitle
+            && i.IsExternal
+            && string.Equals(i.Path, enhancedPath, StringComparison.OrdinalIgnoreCase));
+        int streamIndex = existing?.Index ?? (streams.Count == 0 ? 0 : streams.Max(i => i.Index) + 1);
+        if (existing is not null)
+        {
+            streams.Remove(existing);
+        }
+
+        streams.Add(new MediaStream
+        {
+            Index = streamIndex,
+            Type = MediaStreamType.Subtitle,
+            Codec = "webvtt",
+            Language = language,
+            Title = EnhancedSubtitleTitle,
+            IsExternal = true,
+            IsDefault = false,
+            IsForced = false,
+            Path = enhancedPath
+        });
+        _mediaStreamRepository.SaveMediaStreams(state.ItemId, streams, state.Cancellation.Token);
+
+        Directory.CreateDirectory(persistentCacheDirectory);
+        File.WriteAllText(
+            Path.Combine(persistentCacheDirectory, "enhanced-provenance.json"),
+            JsonSerializer.Serialize(new
+            {
+                title = EnhancedSubtitleTitle,
+                path = enhancedPath,
+                language,
+                model,
+                pipelineVersion = GenerationPipelineVersion,
+                generatedAtUtc = DateTimeOffset.UtcNow,
+                diarized = state.IsDiarized,
+                openAiPolished = state.EnableOpenAiPolish
+            }, JsonOptions));
+
+        state.EnhancedReady = true;
+        state.EnhancedDisplayTitle = EnhancedSubtitleTitle;
+        state.EnhancedSubtitlePath = enhancedPath;
+        _logger.LogInformation(
+            "Auto-caption Enhanced subtitle promoted for session {SessionId}: item={ItemName}; path={SubtitlePath}; streamIndex={StreamIndex}; cues={CueCount}; language={Language}; model={Model}; pipelineVersion={PipelineVersion}",
+            state.SessionId,
+            state.ItemName,
+            enhancedPath,
+            streamIndex,
+            completedCues.Count,
+            language,
+            model,
+            GenerationPipelineVersion);
+        return Task.CompletedTask;
+    }
+
+    private void RemovePromotedEnhancedSubtitles(Video video)
+    {
+        if (!string.IsNullOrWhiteSpace(video.Path))
+        {
+            string? directory = Path.GetDirectoryName(video.Path);
+            string baseName = Path.GetFileNameWithoutExtension(video.Path);
+            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+            {
+                foreach (string path in Directory.EnumerateFiles(
+                             directory,
+                             baseName + "." + EnhancedSubtitleTitle + ".*.vtt",
+                             SearchOption.TopDirectoryOnly))
+                {
+                    try
+                    {
+                        File.Delete(path);
+                        _logger.LogInformation("Deleted promoted Enhanced subtitle for item {ItemId}: {SubtitlePath}", video.Id, path);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete promoted Enhanced subtitle for item {ItemId}: {SubtitlePath}", video.Id, path);
+                    }
+                }
+            }
+        }
+
+        List<MediaStream> streams = _mediaStreamRepository
+            .GetMediaStreams(new MediaStreamQuery { ItemId = video.Id })
+            .ToList();
+        List<string> promotedPaths = streams
+            .Where(i => i.Type == MediaStreamType.Subtitle
+                        && i.IsExternal
+                        && string.Equals(i.Title, EnhancedSubtitleTitle, StringComparison.Ordinal))
+            .Select(i => i.Path)
+            .Where(i => !string.IsNullOrWhiteSpace(i))
+            .Cast<string>()
+            .ToList();
+        int removed = streams.RemoveAll(i =>
+            i.Type == MediaStreamType.Subtitle
+            && i.IsExternal
+            && string.Equals(i.Title, EnhancedSubtitleTitle, StringComparison.Ordinal));
+        if (removed > 0)
+        {
+            foreach (string promotedPath in promotedPaths)
+            {
+                try
+                {
+                    if (File.Exists(promotedPath))
+                    {
+                        File.Delete(promotedPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete managed Enhanced subtitle for item {ItemId}: {SubtitlePath}", video.Id, promotedPath);
+                }
+            }
+
+            _mediaStreamRepository.SaveMediaStreams(video.Id, streams, CancellationToken.None);
+            _logger.LogInformation("Removed {Count} promoted Enhanced subtitle streams for item {ItemId}", removed, video.Id);
+        }
+    }
+
+    private static string NormalizePromotedLanguage(string language)
+    {
+        return string.Equals(language, "en", StringComparison.OrdinalIgnoreCase) ? "eng" : "und";
+    }
+
     private static void WriteVtt(string vttPath, IReadOnlyList<CaptionCue> cues)
     {
         using var writer = new StreamWriter(vttPath, append: false, Encoding.UTF8);
@@ -3092,6 +3279,12 @@ public class AutoGenerateCaptionService
         public string Mode { get; init; } = CaptionGenerationModes.Live;
 
         public bool IsDiarized { get; init; }
+
+        public bool EnhancedReady { get; set; }
+
+        public string? EnhancedDisplayTitle { get; set; }
+
+        public string? EnhancedSubtitlePath { get; set; }
 
         public int ProgressPercent { get; set; }
 

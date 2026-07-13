@@ -74,4 +74,19 @@ public class CaptionSessionDto
     /// Gets or sets the media duration in ticks when known.
     /// </summary>
     public long? DurationTicks { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a durable Enhanced subtitle is ready.
+    /// </summary>
+    public bool EnhancedReady { get; set; }
+
+    /// <summary>
+    /// Gets or sets the user-facing title of the promoted Enhanced subtitle.
+    /// </summary>
+    public string? EnhancedDisplayTitle { get; set; }
+
+    /// <summary>
+    /// Gets or sets the relative URL used to switch to the completed Enhanced VTT.
+    /// </summary>
+    public string? EnhancedVttUrl { get; set; }
 }

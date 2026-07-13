@@ -253,12 +253,12 @@
                             <input id="PromoteCompletedSubtitles" name="PromoteCompletedSubtitles" type="checkbox" is="emby-checkbox" />
                             <span>Promote completed subtitles</span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Reserved for saving completed subtitles next to media in a future release. Today, completed model-eligible sessions write a stitched cache VTT.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Legacy preference retained for compatibility. Enhanced mode always promotes successful Full output as a normal subtitle track.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PromotableModels">Promotable models</label>
                         <input id="PromotableModels" name="PromotableModels" type="text" is="emby-input" />
-                        <div class="fieldDescription">Comma-separated model names allowed to produce stitched cache VTTs now and external subtitle files later. Empty allows any model.</div>
+                        <div class="fieldDescription">Comma-separated model names allowed to produce stitched cache VTTs and Enhanced subtitle tracks. Empty allows any model.</div>
                     </div>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button">
