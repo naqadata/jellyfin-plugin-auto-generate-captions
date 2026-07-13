@@ -39,6 +39,7 @@ The current implementation provides:
 - Optional local worker diarization with WebVTT speaker voice tags.
 - Full-session status with real worker progress from 0-100%.
 - Atomic promotion of completed Full output as a normal `AI Generated (Enhanced)` external subtitle track backed by durable plugin-managed storage.
+- Durable `diarization-turns.json` diagnostics for Full jobs and an explicit polishing phase for clients.
 
 ## API Contract
 
@@ -141,7 +142,7 @@ Client behavior:
 4. Set the custom caption task URL to the returned `liveVttUrl`.
 5. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
 6. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
-7. Poll Full session status to show `Live - Enhancing <progressPercent>%` in Subtitle Tools.
+7. Poll Full session status to show transcription progress, then `Live - Enhancing - Polishing` during OpenAI cleanup in Subtitle Tools.
 8. Call the stop endpoint when Live playback exits. Full jobs are background-owned and continue when playback pauses or exits.
 
 ## Worker Design

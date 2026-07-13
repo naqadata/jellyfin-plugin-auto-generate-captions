@@ -126,6 +126,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.0.zip",
         "checksum": "5aa218c3a1a006df55bae27ce8a4de27",
         "timestamp": "2026-07-13T21:11:04Z"
+      },
+      {
+        "version": "0.4.1.0",
+        "changelog": "Improve Enhanced speaker boundaries and polishing progress",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.1.zip",
+        "checksum": "8bcdf66dc11732399ec1cc64452f1ad7",
+        "timestamp": "2026-07-13T21:53:27Z"
       }
     ]
   }

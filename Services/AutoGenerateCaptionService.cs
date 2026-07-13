@@ -27,7 +27,7 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 23;
+    private const int GenerationPipelineVersion = 24;
     private const string EnhancedSubtitleTitle = "AI Generated (Enhanced)";
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -195,7 +195,8 @@ public class AutoGenerateCaptionService
             IsPrefetch = true,
             Mode = CaptionGenerationModes.Full,
             IsDiarized = config.EnableBackgroundDiarization,
-            Message = "Background caption prefetch queued."
+            Message = "Background caption prefetch queued.",
+            ProcessingPhase = "queued"
         };
 
         string cacheRoot = GetCacheRoot(config);
@@ -446,6 +447,7 @@ public class AutoGenerateCaptionService
             HasCachedCaptions = state.HasCachedCaptions,
             Mode = state.Mode,
             ProgressPercent = state.ProgressPercent,
+            ProcessingPhase = state.ProcessingPhase,
             IsDiarized = state.IsDiarized,
             DurationTicks = state.DurationTicks,
             EnhancedReady = state.EnhancedReady,
@@ -479,6 +481,7 @@ public class AutoGenerateCaptionService
             HasCachedCaptions = dto.HasCachedCaptions,
             Mode = dto.Mode,
             ProgressPercent = dto.ProgressPercent,
+            ProcessingPhase = dto.ProcessingPhase,
             IsDiarized = dto.IsDiarized,
             DurationTicks = dto.DurationTicks,
             EnhancedReady = dto.EnhancedReady,
@@ -666,6 +669,7 @@ public class AutoGenerateCaptionService
                 await PromoteEnhancedSubtitleAsync(state, persistentCacheDirectory, config.RemoteWorkerModel).ConfigureAwait(false);
                 state.GeneratedThroughTicks = durationTicks;
                 state.ProgressPercent = 100;
+                state.ProcessingPhase = "complete";
                 state.Status = CaptionSessionStatuses.Cached;
                 state.Message = "Full-item generated captions were already cached.";
                 return;
@@ -673,6 +677,7 @@ public class AutoGenerateCaptionService
 
             state.Status = CaptionSessionStatuses.Generating;
             state.ProgressPercent = 1;
+            state.ProcessingPhase = "extracting";
             state.Message = "Extracting full audio for background caption generation.";
             await ExtractAudioChunkAsync(
                 state,
@@ -681,6 +686,7 @@ public class AutoGenerateCaptionService
                 TicksToSeconds(durationTicks),
                 audioPath).ConfigureAwait(false);
 
+            state.ProcessingPhase = "transcribing";
             state.Message = "Background transcription and diarization queued on the remote worker.";
             bool completed = await _remoteCaptionWorkerClient.TryTranscribeAsync(
                 config,
@@ -694,6 +700,7 @@ public class AutoGenerateCaptionService
                 diarize: config.EnableBackgroundDiarization,
                 sliceSeconds: Math.Clamp(config.BackgroundSliceSeconds, 60, 1800),
                 progress: progress => state.ProgressPercent = Math.Clamp(5 + (int)Math.Round(progress * 90), 5, 95),
+                diarizationDiagnosticsPath: Path.Combine(persistentCacheDirectory, "diarization-turns.json"),
                 state.Cancellation.Token).ConfigureAwait(false);
             if (!completed)
             {
@@ -723,6 +730,7 @@ public class AutoGenerateCaptionService
 
             if (state.EnableOpenAiPolish && IsOpenAiCaptionPolishConfigured(config))
             {
+                state.ProcessingPhase = "polishing";
                 state.Message = "Polishing speaker-safe caption groups with OpenAI.";
                 await PolishFullCaptionsWithOpenAiAsync(
                     state,
@@ -730,6 +738,8 @@ public class AutoGenerateCaptionService
                     persistentCacheDirectory,
                     config.RemoteWorkerModel).ConfigureAwait(false);
             }
+
+            state.ProcessingPhase = "finalizing";
 
             List<CaptionCue> completedCues;
             lock (state.SyncRoot)
@@ -745,6 +755,7 @@ public class AutoGenerateCaptionService
 
             state.GeneratedThroughTicks = durationTicks;
             state.ProgressPercent = 100;
+            state.ProcessingPhase = "complete";
             state.Status = CaptionSessionStatuses.Complete;
             state.Message = string.Create(
                 CultureInfo.InvariantCulture,
@@ -760,12 +771,14 @@ public class AutoGenerateCaptionService
         catch (OperationCanceledException)
         {
             state.Status = CaptionSessionStatuses.Stopped;
+            state.ProcessingPhase = "stopped";
             state.Message = "Background caption prefetch cancelled.";
             state.StoppedAt = DateTimeOffset.UtcNow;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Auto-caption background prefetch failed for session {SessionId}", state.SessionId);
+            state.ProcessingPhase = "failed";
             FailSession(state, ex.Message);
         }
         finally
@@ -2505,6 +2518,7 @@ public class AutoGenerateCaptionService
                 diarize,
                 sliceSeconds,
                 progress: null,
+                diarizationDiagnosticsPath: null,
                 state.Cancellation.Token).ConfigureAwait(false);
 
             if (completed)
@@ -3287,6 +3301,8 @@ public class AutoGenerateCaptionService
         public string? EnhancedSubtitlePath { get; set; }
 
         public int ProgressPercent { get; set; }
+
+        public string? ProcessingPhase { get; set; }
 
         public string Status { get; set; } = CaptionSessionStatuses.WarmingUp;
 

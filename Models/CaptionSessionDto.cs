@@ -66,6 +66,11 @@ public class CaptionSessionDto
     public int ProgressPercent { get; set; }
 
     /// <summary>
+    /// Gets or sets the current machine-readable processing phase for Full captions.
+    /// </summary>
+    public string? ProcessingPhase { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether speaker diarization is enabled for this session.
     /// </summary>
     public bool IsDiarized { get; set; }

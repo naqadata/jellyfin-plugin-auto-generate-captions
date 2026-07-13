@@ -45,6 +45,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
     /// <param name="diarize">Whether to perform speaker diarization.</param>
     /// <param name="sliceSeconds">Background transcription slice size, or zero for one pass.</param>
     /// <param name="progress">Optional callback receiving worker progress from zero through one.</param>
+    /// <param name="diarizationDiagnosticsPath">Optional durable path for raw diarization turns.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><c>true</c> when remote transcription completed; <c>false</c> when remote is unavailable before a job starts.</returns>
     public async Task<bool> TryTranscribeAsync(
@@ -59,6 +60,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         bool diarize,
         int sliceSeconds,
         Action<double>? progress,
+        string? diarizationDiagnosticsPath,
         CancellationToken cancellationToken)
     {
         if (!TryGetBaseUri(config, out Uri? baseUri) || baseUri is null)
@@ -89,6 +91,13 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         RemoteJobResponse completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, progress, cancellationToken).ConfigureAwait(false);
         RemoteTranscriptResult result = await GetResultAsync(baseUri, config, sessionId, completedJob.JobId, cancellationToken).ConfigureAwait(false);
         WriteVtt(vttPath, result.Segments, offsetSeconds);
+        if (!string.IsNullOrWhiteSpace(diarizationDiagnosticsPath) && result.DiarizationTurns is not null)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(diarizationDiagnosticsPath)!);
+            File.WriteAllText(
+                diarizationDiagnosticsPath,
+                JsonSerializer.Serialize(result.DiarizationTurns, new JsonSerializerOptions { WriteIndented = true }));
+        }
 
         _logger.LogInformation(
             "Auto-caption remote worker complete for session {SessionId}: worker={WorkerUrl}; jobId={JobId}; model={Model}; language={Language}; segments={SegmentCount}; vttBytes={VttBytes}; metadataEnableRegrouping={MetadataEnableRegrouping}; metadataMaxCueCharacters={MetadataMaxCueCharacters}; metadataMaxCueWords={MetadataMaxCueWords}; metadataMaxCueDurationSeconds={MetadataMaxCueDurationSeconds}",
@@ -434,7 +443,13 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
     private sealed record RemoteTranscriptResult(
         [property: JsonPropertyName("language")] string? Language,
         [property: JsonPropertyName("segments")] List<RemoteSegment> Segments,
-        [property: JsonPropertyName("metadata")] Dictionary<string, JsonElement>? Metadata);
+        [property: JsonPropertyName("metadata")] Dictionary<string, JsonElement>? Metadata,
+        [property: JsonPropertyName("diarization_turns")] List<RemoteDiarizationTurn>? DiarizationTurns);
+
+    private sealed record RemoteDiarizationTurn(
+        [property: JsonPropertyName("start")] double Start,
+        [property: JsonPropertyName("end")] double End,
+        [property: JsonPropertyName("speaker")] string Speaker);
 
     private sealed record RemoteSegment(
         [property: JsonPropertyName("start")] double Start,
