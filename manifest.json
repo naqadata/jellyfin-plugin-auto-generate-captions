@@ -110,6 +110,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.3.0.zip",
         "checksum": "02965d54d7033346845eac65bcbb8e03",
         "timestamp": "2026-07-13T06:02:26Z"
+      },
+      {
+        "version": "0.3.1.0",
+        "changelog": "Make Full OpenAI polish speaker-safe and failure-isolated",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.3.1.zip",
+        "checksum": "8f6853836d40ff797befbcff3a7f19d3",
+        "timestamp": "2026-07-13T18:21:12Z"
       }
     ]
   }

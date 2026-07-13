@@ -143,7 +143,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableBackgroundDiarization { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether buffered live captions should be polished with OpenAI.
+    /// Gets or sets a value indicating whether generated captions should be polished with OpenAI.
     /// </summary>
     public bool EnableOpenAiCaptionPolish { get; set; }
 

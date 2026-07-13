@@ -160,14 +160,14 @@
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
                             <input id="EnableOpenAiCaptionPolish" name="EnableOpenAiCaptionPolish" type="checkbox" is="emby-checkbox" />
-                            <span>Polish buffered captions with OpenAI</span>
+                            <span>Polish generated captions with OpenAI</span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Optionally clean up caption text and sentence breaks after enough live-caption buffer exists.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Clean up text and sentence breaks in buffered Live captions and after Full transcription and diarization.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API key</label>
                         <input id="OpenAiApiKey" name="OpenAiApiKey" type="password" is="emby-input" />
-                        <div class="fieldDescription">Only used when caption polish is enabled. Live captioning continues without it.</div>
+                        <div class="fieldDescription">Only used when caption polish is enabled. Caption generation continues without it or when a polish group fails.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiCaptionPolishModel">OpenAI polish model</label>

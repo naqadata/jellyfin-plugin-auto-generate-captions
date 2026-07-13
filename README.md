@@ -153,6 +153,7 @@ The worker should:
 - Send earlier transcript text as Whisper context and reconcile repeated words at committed boundaries.
 - Submit user-requested Full transcriptions at background priority in resumable worker slices.
 - Diarize completed Full transcriptions locally on the worker when configured.
+- Reconcile only tightly bounded unlabeled fragments, then polish Full captions in immutable speaker groups; a rejected group keeps its original cues without blocking later groups.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
 - Keep chunk caches for all models, but only write stitched cache output when the model is listed in `Promotable models`.
 - External subtitle promotion is planned, but not implemented yet.
@@ -169,7 +170,7 @@ Relevant cue-shaping settings:
 - `Max cue words`: target maximum words per generated cue.
 - `Max cue duration seconds`: target maximum cue display duration.
 - `Regroup split gap seconds`: pause length that encourages splitting speech into separate cues.
-- `Polish buffered captions with OpenAI`: optionally cleans buffered live captions after enough lookahead exists. Live caption generation does not require OpenAI.
+- `Polish generated captions with OpenAI`: optionally cleans buffered Live captions after enough lookahead exists and cleans Full captions after diarization. Caption generation does not require OpenAI, and failed Full groups retain their original cues.
 - `OpenAI polish lookahead seconds`: minimum generated-caption buffer ahead of playback before polishing starts.
 - `OpenAI polish window seconds`: maximum caption span sent to OpenAI in one pass.
 

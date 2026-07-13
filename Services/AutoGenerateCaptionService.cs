@@ -25,7 +25,7 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 21;
+    private const int GenerationPipelineVersion = 22;
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
@@ -234,6 +234,16 @@ public class AutoGenerateCaptionService
         if (!_sessions.TryGetValue(sessionId, out CaptionSessionState? state))
         {
             return null;
+        }
+
+        if (state.IsPrefetch && IsActiveGenerationStatus(state.Status))
+        {
+            _logger.LogInformation(
+                "Ignored client stop for background-owned Full auto-caption session {SessionId}; status={Status}; progress={ProgressPercent}",
+                sessionId,
+                state.Status,
+                state.ProgressPercent);
+            return ToStatusDto(state);
         }
 
         state.Status = CaptionSessionStatuses.Stopped;
@@ -674,6 +684,10 @@ public class AutoGenerateCaptionService
             }
 
             IReadOnlyList<CaptionCue> cues = PrepareChunkCues(ParseVtt(vttPath, 0), 0, durationTicks);
+            if (config.EnableBackgroundDiarization)
+            {
+                cues = ReconcileUnlabeledSpeakerFragments(state.SessionId, cues);
+            }
             lock (state.SyncRoot)
             {
                 state.Cues.Clear();
@@ -688,27 +702,28 @@ public class AutoGenerateCaptionService
             Directory.CreateDirectory(persistentCacheDirectory);
             AddChunkResult(state, cues, 0, durationTicks);
             WriteCacheMetadata(state, persistentCacheDirectory);
-            WriteChunkCache(state, persistentCacheDirectory, 0, 0, durationTicks, cues);
             WriteCombinedCacheFromState(state, config, persistentCacheDirectory, config.RemoteWorkerModel);
 
             if (state.EnableOpenAiPolish && IsOpenAiCaptionPolishConfigured(config))
             {
-                state.LastClientPositionTicks = -TimeSpan.FromSeconds(
-                    Math.Clamp(config.OpenAiPolishGuardBandSeconds, 0, 60)).Ticks;
-                for (int pass = 0; pass < 100; pass++)
-                {
-                    long previousPolishedThrough = state.LastOpenAiPolishedThroughTicks;
-                    await TryPolishBufferedCaptionsAsync(
-                        state,
-                        config,
-                        persistentCacheDirectory,
-                        config.RemoteWorkerModel).ConfigureAwait(false);
-                    if (state.LastOpenAiPolishedThroughTicks <= previousPolishedThrough)
-                    {
-                        break;
-                    }
-                }
+                state.Message = "Polishing speaker-safe caption groups with OpenAI.";
+                await PolishFullCaptionsWithOpenAiAsync(
+                    state,
+                    config,
+                    persistentCacheDirectory,
+                    config.RemoteWorkerModel).ConfigureAwait(false);
             }
+
+            List<CaptionCue> completedCues;
+            lock (state.SyncRoot)
+            {
+                completedCues = state.Cues
+                    .OrderBy(i => i.StartTicks)
+                    .ThenBy(i => i.EndTicks)
+                    .ToList();
+            }
+
+            WriteChunkCache(state, persistentCacheDirectory, 0, 0, durationTicks, completedCues);
 
             state.GeneratedThroughTicks = durationTicks;
             state.ProgressPercent = 100;
@@ -1287,6 +1302,472 @@ public class AutoGenerateCaptionService
 
             return string.IsNullOrWhiteSpace(context) ? null : context;
         }
+    }
+
+    private IReadOnlyList<CaptionCue> ReconcileUnlabeledSpeakerFragments(
+        Guid sessionId,
+        IReadOnlyList<CaptionCue> cues)
+    {
+        var reconciled = cues.ToList();
+        int assignedCount = 0;
+        long maximumGapTicks = TimeSpan.FromSeconds(2).Ticks;
+        for (int index = 0; index < reconciled.Count; index++)
+        {
+            CaptionCue cue = reconciled[index];
+            string text = NormalizeCueText(cue.Text);
+            if (!string.IsNullOrWhiteSpace(cue.Speaker)
+                || text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length > 2
+                || EndsSentence(text))
+            {
+                continue;
+            }
+
+            CaptionCue? next = index + 1 < reconciled.Count ? reconciled[index + 1] : null;
+            if (next is not null
+                && !string.IsNullOrWhiteSpace(next.Speaker)
+                && next.StartTicks >= cue.EndTicks
+                && next.StartTicks - cue.EndTicks <= maximumGapTicks
+                && StartsWithLowercaseWord(next.Text))
+            {
+                reconciled[index] = cue with { Speaker = next.Speaker };
+                assignedCount++;
+                continue;
+            }
+
+            CaptionCue? previous = index > 0 ? reconciled[index - 1] : null;
+            if (previous is not null
+                && !string.IsNullOrWhiteSpace(previous.Speaker)
+                && cue.StartTicks >= previous.EndTicks
+                && cue.StartTicks - previous.EndTicks <= maximumGapTicks
+                && !EndsSentence(previous.Text)
+                && StartsWithLowercaseWord(text))
+            {
+                reconciled[index] = cue with { Speaker = previous.Speaker };
+                assignedCount++;
+            }
+        }
+
+        _logger.LogInformation(
+            "Auto-caption reconciled unlabeled diarization fragments for session {SessionId}: assigned={AssignedCount}; totalCues={CueCount}; maximumGapMs={MaximumGapMs}",
+            sessionId,
+            assignedCount,
+            reconciled.Count,
+            TicksToMilliseconds(maximumGapTicks));
+        return reconciled;
+    }
+
+    private async Task PolishFullCaptionsWithOpenAiAsync(
+        CaptionSessionState state,
+        PluginConfiguration config,
+        string persistentCacheDirectory,
+        string model)
+    {
+        List<CaptionCue> sourceCues;
+        lock (state.SyncRoot)
+        {
+            sourceCues = state.Cues
+                .OrderBy(i => i.StartTicks)
+                .ThenBy(i => i.EndTicks)
+                .ToList();
+        }
+
+        List<List<SpeakerPolishGroup>> batches = BuildSpeakerPolishBatches(sourceCues, 80);
+        int appliedGroups = 0;
+        int rejectedGroups = 0;
+        int appliedCues = 0;
+        foreach ((List<SpeakerPolishGroup> batch, int batchIndex) in batches.Select((value, index) => (value, index)))
+        {
+            try
+            {
+                OpenAiSpeakerGroupPolishResponse response = await PolishSpeakerGroupsWithOpenAiAsync(
+                    state.SessionId,
+                    config,
+                    sourceCues,
+                    batch,
+                    state.Cancellation.Token).ConfigureAwait(false);
+                Dictionary<string, OpenAiSpeakerPolishGroup> returnedGroups = response.Groups
+                    .GroupBy(i => i.GroupId, StringComparer.Ordinal)
+                    .ToDictionary(i => i.Key, i => i.First(), StringComparer.Ordinal);
+
+                foreach (SpeakerPolishGroup group in batch)
+                {
+                    if (!returnedGroups.TryGetValue(group.GroupId, out OpenAiSpeakerPolishGroup? returned))
+                    {
+                        rejectedGroups++;
+                        _logger.LogWarning(
+                            "Auto-caption Full OpenAI polish omitted speaker group for session {SessionId}: batch={Batch}; group={Group}; speaker={Speaker}; inputCues={InputCueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
+                            state.SessionId,
+                            batchIndex,
+                            group.GroupId,
+                            group.Speaker ?? "(unlabeled)",
+                            group.Cues.Count,
+                            group.StartTicks,
+                            group.EndTicks);
+                        continue;
+                    }
+
+                    try
+                    {
+                        IReadOnlyList<CaptionCue> polished = ValidateSpeakerGroupPolishedCues(returned, group);
+                        lock (state.SyncRoot)
+                        {
+                            MergeChunkCues(state.Cues, polished, group.StartTicks, group.EndTicks);
+                            state.LastOpenAiPolishedThroughTicks = Math.Max(state.LastOpenAiPolishedThroughTicks, group.EndTicks);
+                        }
+
+                        appliedGroups++;
+                        appliedCues += polished.Count;
+                        _logger.LogInformation(
+                            "Auto-caption Full OpenAI polish applied speaker group for session {SessionId}: batch={Batch}; group={Group}; speaker={Speaker}; inputCues={InputCueCount}; outputCues={OutputCueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
+                            state.SessionId,
+                            batchIndex,
+                            group.GroupId,
+                            group.Speaker ?? "(unlabeled)",
+                            group.Cues.Count,
+                            polished.Count,
+                            group.StartTicks,
+                            group.EndTicks);
+                    }
+                    catch (Exception ex)
+                    {
+                        rejectedGroups++;
+                        _logger.LogWarning(
+                            ex,
+                            "Auto-caption Full OpenAI polish rejected speaker group for session {SessionId}: batch={Batch}; group={Group}; expectedSpeaker={Speaker}; inputCues={InputCueCount}; returnedCues={OutputCueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}. Keeping original group.",
+                            state.SessionId,
+                            batchIndex,
+                            group.GroupId,
+                            group.Speaker ?? "(unlabeled)",
+                            group.Cues.Count,
+                            returned.Cues.Count,
+                            group.StartTicks,
+                            group.EndTicks);
+                    }
+                }
+
+                WriteCombinedCacheFromState(state, config, persistentCacheDirectory, model);
+            }
+            catch (OperationCanceledException) when (state.Cancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                rejectedGroups += batch.Count;
+                _logger.LogWarning(
+                    ex,
+                    "Auto-caption Full OpenAI polish request failed for session {SessionId}: batch={Batch}; groups={GroupCount}; inputCues={InputCueCount}. Keeping original groups and continuing.",
+                    state.SessionId,
+                    batchIndex,
+                    batch.Count,
+                    batch.Sum(i => i.Cues.Count));
+            }
+        }
+
+        _logger.LogInformation(
+            "Auto-caption Full OpenAI polish complete for session {SessionId}: batches={BatchCount}; appliedGroups={AppliedGroups}; rejectedGroups={RejectedGroups}; outputCues={OutputCueCount}",
+            state.SessionId,
+            batches.Count,
+            appliedGroups,
+            rejectedGroups,
+            appliedCues);
+    }
+
+    private async Task<OpenAiSpeakerGroupPolishResponse> PolishSpeakerGroupsWithOpenAiAsync(
+        Guid sessionId,
+        PluginConfiguration config,
+        IReadOnlyList<CaptionCue> allCues,
+        IReadOnlyList<SpeakerPolishGroup> groups,
+        CancellationToken cancellationToken)
+    {
+        int maxCueWords = Math.Clamp(Math.Max(config.MaxCueWords, 12), 3, 40);
+        long batchStartTicks = groups.Min(i => i.StartTicks);
+        long batchEndTicks = groups.Max(i => i.EndTicks);
+        long contextWindowTicks = TimeSpan.FromSeconds(Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800)).Ticks;
+        List<CaptionCue> contextBefore = allCues
+            .Where(i => i.EndTicks <= batchStartTicks && i.EndTicks >= batchStartTicks - contextWindowTicks)
+            .OrderBy(i => i.StartTicks)
+            .ToList();
+        List<CaptionCue> contextAfter = allCues
+            .Where(i => i.StartTicks >= batchEndTicks && i.StartTicks <= batchEndTicks + contextWindowTicks)
+            .OrderBy(i => i.StartTicks)
+            .ToList();
+        var request = new
+        {
+            model = GetOpenAiCaptionPolishModel(config),
+            input = new object[]
+            {
+                new
+                {
+                    role = "system",
+                    content = new object[]
+                    {
+                        new
+                        {
+                            type = "input_text",
+                            text = BuildOpenAiSpeakerGroupPolishPrompt(maxCueWords)
+                        }
+                    }
+                },
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new
+                        {
+                            type = "input_text",
+                            text = JsonSerializer.Serialize(new
+                            {
+                                context_before = contextBefore.Select(ToOpenAiCue),
+                                editable_groups = groups.Select(group => new
+                                {
+                                    group_id = group.GroupId,
+                                    speaker = group.Speaker,
+                                    window_start_ms = TicksToMilliseconds(group.StartTicks),
+                                    window_end_ms = TicksToMilliseconds(group.EndTicks),
+                                    cues = group.Cues.Select(ToOpenAiCue)
+                                }),
+                                context_after = contextAfter.Select(ToOpenAiCue)
+                            }, JsonOptions)
+                        }
+                    }
+                }
+            },
+            text = new
+            {
+                verbosity = "low",
+                format = new
+                {
+                    type = "json_schema",
+                    name = "speaker_group_caption_polish",
+                    strict = true,
+                    schema = new
+                    {
+                        type = "object",
+                        additionalProperties = false,
+                        properties = new
+                        {
+                            groups = new
+                            {
+                                type = "array",
+                                items = new
+                                {
+                                    type = "object",
+                                    additionalProperties = false,
+                                    properties = new
+                                    {
+                                        group_id = new { type = "string" },
+                                        speaker = new { type = new[] { "string", "null" } },
+                                        cues = new
+                                        {
+                                            type = "array",
+                                            items = new
+                                            {
+                                                type = "object",
+                                                additionalProperties = false,
+                                                properties = new
+                                                {
+                                                    start_ms = new { type = "integer" },
+                                                    end_ms = new { type = "integer" },
+                                                    text = new { type = "string" },
+                                                    speaker = new { type = new[] { "string", "null" } }
+                                                },
+                                                required = new[] { "start_ms", "end_ms", "text", "speaker" }
+                                            }
+                                        }
+                                    },
+                                    required = new[] { "group_id", "speaker", "cues" }
+                                }
+                            }
+                        },
+                        required = new[] { "groups" }
+                    }
+                }
+            },
+            store = false
+        };
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/responses");
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.OpenAiApiKey.Trim());
+        httpRequest.Content = JsonContent.Create(request, options: JsonOptions);
+        Stopwatch requestStopwatch = Stopwatch.StartNew();
+        using HttpResponseMessage response = await _openAiHttpClient.SendAsync(httpRequest, timeout.Token).ConfigureAwait(false);
+        string responseText = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+        requestStopwatch.Stop();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"OpenAI speaker-group caption polish request failed with status {(int)response.StatusCode} after {requestStopwatch.ElapsedMilliseconds}ms: {responseText}"));
+        }
+
+        string outputText = ExtractOpenAiOutputText(responseText);
+        OpenAiSpeakerGroupPolishResponse? parsed = JsonSerializer.Deserialize<OpenAiSpeakerGroupPolishResponse>(outputText, JsonOptions);
+        if (parsed?.Groups is null)
+        {
+            throw new InvalidOperationException("OpenAI speaker-group caption polish returned no groups.");
+        }
+
+        _logger.LogInformation(
+            "Auto-caption Full OpenAI polish response for session {SessionId}: statusCode={StatusCode}; elapsedMs={ElapsedMs}; inputGroups={InputGroupCount}; outputGroups={OutputGroupCount}; inputCues={InputCueCount}; outputCues={OutputCueCount}; responseBytes={ResponseBytes}",
+            sessionId,
+            response.StatusCode,
+            requestStopwatch.ElapsedMilliseconds,
+            groups.Count,
+            parsed.Groups.Count,
+            groups.Sum(i => i.Cues.Count),
+            parsed.Groups.Sum(i => i.Cues.Count),
+            responseText.Length);
+        return parsed;
+    }
+
+    private static object ToOpenAiCue(CaptionCue cue)
+    {
+        return new
+        {
+            start_ms = TicksToMilliseconds(cue.StartTicks),
+            end_ms = TicksToMilliseconds(cue.EndTicks),
+            text = NormalizeCueText(cue.Text),
+            speaker = cue.Speaker
+        };
+    }
+
+    private static List<List<SpeakerPolishGroup>> BuildSpeakerPolishBatches(
+        IReadOnlyList<CaptionCue> cues,
+        int maximumCuesPerBatch)
+    {
+        var runs = new List<List<CaptionCue>>();
+        foreach (CaptionCue cue in cues)
+        {
+            if (runs.Count == 0
+                || !string.Equals(runs[^1][^1].Speaker, cue.Speaker, StringComparison.Ordinal))
+            {
+                runs.Add([]);
+            }
+
+            runs[^1].Add(cue);
+        }
+
+        var batches = new List<List<SpeakerPolishGroup>>();
+        var currentBatch = new List<SpeakerPolishGroup>();
+        int currentCueCount = 0;
+        int groupIndex = 0;
+        foreach (List<CaptionCue> run in runs)
+        {
+            int offset = 0;
+            while (offset < run.Count)
+            {
+                if (currentCueCount == maximumCuesPerBatch)
+                {
+                    batches.Add(currentBatch);
+                    currentBatch = [];
+                    currentCueCount = 0;
+                }
+
+                int take = Math.Min(run.Count - offset, maximumCuesPerBatch - currentCueCount);
+                List<CaptionCue> groupCues = run.Skip(offset).Take(take).ToList();
+                currentBatch.Add(new SpeakerPolishGroup(
+                    string.Create(CultureInfo.InvariantCulture, $"speaker-group-{groupIndex:0000}"),
+                    groupCues[0].Speaker,
+                    groupCues));
+                groupIndex++;
+                currentCueCount += take;
+                offset += take;
+            }
+        }
+
+        if (currentBatch.Count > 0)
+        {
+            batches.Add(currentBatch);
+        }
+
+        return batches;
+    }
+
+    private static IReadOnlyList<CaptionCue> ValidateSpeakerGroupPolishedCues(
+        OpenAiSpeakerPolishGroup returned,
+        SpeakerPolishGroup expected)
+    {
+        if (!string.Equals(returned.Speaker, expected.Speaker, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"OpenAI changed group speaker from '{expected.Speaker ?? "(unlabeled)"}' to '{returned.Speaker ?? "(unlabeled)"}'."));
+        }
+
+        if (returned.Cues.Count == 0 || returned.Cues.Count > expected.Cues.Count * 3)
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"OpenAI returned an invalid cue count for {expected.GroupId}: input={expected.Cues.Count}; output={returned.Cues.Count}."));
+        }
+
+        var output = new List<CaptionCue>();
+        long previousStartTicks = expected.StartTicks;
+        foreach ((OpenAiCaptionCue cue, int cueIndex) in returned.Cues
+                     .OrderBy(i => i.StartMs)
+                     .ThenBy(i => i.EndMs)
+                     .Select((value, index) => (value, index)))
+        {
+            long startTicks = MillisecondsToTicks(cue.StartMs);
+            long endTicks = MillisecondsToTicks(cue.EndMs);
+            if (!string.Equals(cue.Speaker, expected.Speaker, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"OpenAI changed speaker in {expected.GroupId} cue {cueIndex}: expected='{expected.Speaker ?? "(unlabeled)"}'; returned='{cue.Speaker ?? "(unlabeled)"}'."));
+            }
+
+            if (startTicks < expected.StartTicks || endTicks > expected.EndTicks || endTicks <= startTicks || startTicks < previousStartTicks)
+            {
+                throw new InvalidOperationException(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"OpenAI returned timestamps outside {expected.GroupId} in cue {cueIndex}: startTicks={startTicks}; endTicks={endTicks}; allowedStartTicks={expected.StartTicks}; allowedEndTicks={expected.EndTicks}."));
+            }
+
+            string text = NormalizeCueText(cue.Text);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                output.Add(new CaptionCue(
+                    string.Create(CultureInfo.InvariantCulture, $"openai-{expected.GroupId}-{output.Count:000}"),
+                    startTicks,
+                    endTicks,
+                    text,
+                    expected.Speaker));
+            }
+
+            previousStartTicks = startTicks;
+        }
+
+        if (output.Count == 0)
+        {
+            throw new InvalidOperationException($"OpenAI returned no usable cues for {expected.GroupId}.");
+        }
+
+        return output;
+    }
+
+    private static bool EndsSentence(string text)
+    {
+        string normalized = NormalizeCueText(text).TrimEnd();
+        return normalized.EndsWith(".", StringComparison.Ordinal)
+               || normalized.EndsWith("?", StringComparison.Ordinal)
+               || normalized.EndsWith("!", StringComparison.Ordinal);
+    }
+
+    private static bool StartsWithLowercaseWord(string text)
+    {
+        return NormalizeCueText(text).FirstOrDefault(char.IsLetter) is char first && char.IsLower(first);
+    }
+
+    private static string BuildOpenAiSpeakerGroupPolishPrompt(int maxCueWords)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"Clean up the editable_groups of auto-generated subtitles. Each group is one immutable speaker run. Return every group_id exactly once and preserve its group speaker and every cue speaker exactly, including null. Never move words or timestamps between groups. Keep every returned cue inside that group's window_start_ms and window_end_ms. context_before and context_after are read-only context: use them to understand sentence flow, but never return or rewrite them. Within each group, keep wording faithful while improving punctuation, capitalization, and sentence flow. You may move words between neighboring cues, split cues, or merge cues only inside the same group. Prefer cue boundaries at sentence boundaries, clause boundaries, or natural speech pauses. Do not force an orphan fragment into another group; preserve it when the immutable speaker boundary prevents a safe repair. Hard rule: split cues longer than {maxCueWords} words into consecutive cues with roughly even word counts while preserving phrase boundaries. Do not add decorative punctuation or invent wording. Do not censor profanity. Preserve lyrics and repeated syllables. Return only the rewritten editable groups.");
     }
 
     private async Task TryPolishBufferedCaptionsAsync(
@@ -2675,6 +3156,24 @@ public class AutoGenerateCaptionService
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
     private sealed record OpenAiCaptionPolishResponse(
+        [property: JsonPropertyName("cues")] IReadOnlyList<OpenAiCaptionCue> Cues);
+
+    private sealed record SpeakerPolishGroup(
+        string GroupId,
+        string? Speaker,
+        IReadOnlyList<CaptionCue> Cues)
+    {
+        public long StartTicks => Cues[0].StartTicks;
+
+        public long EndTicks => Cues[^1].EndTicks;
+    }
+
+    private sealed record OpenAiSpeakerGroupPolishResponse(
+        [property: JsonPropertyName("groups")] IReadOnlyList<OpenAiSpeakerPolishGroup> Groups);
+
+    private sealed record OpenAiSpeakerPolishGroup(
+        [property: JsonPropertyName("group_id")] string GroupId,
+        [property: JsonPropertyName("speaker")] string? Speaker,
         [property: JsonPropertyName("cues")] IReadOnlyList<OpenAiCaptionCue> Cues);
 
     private sealed record OpenAiCaptionCue(
