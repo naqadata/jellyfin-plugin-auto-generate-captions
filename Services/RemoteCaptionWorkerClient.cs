@@ -44,6 +44,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
     /// <param name="initialPrompt">Optional transcript context from the preceding live window.</param>
     /// <param name="diarize">Whether to perform speaker diarization.</param>
     /// <param name="sliceSeconds">Background transcription slice size, or zero for one pass.</param>
+    /// <param name="progress">Optional callback receiving worker progress from zero through one.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><c>true</c> when remote transcription completed; <c>false</c> when remote is unavailable before a job starts.</returns>
     public async Task<bool> TryTranscribeAsync(
@@ -57,6 +58,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         string? initialPrompt,
         bool diarize,
         int sliceSeconds,
+        Action<double>? progress,
         CancellationToken cancellationToken)
     {
         if (!TryGetBaseUri(config, out Uri? baseUri) || baseUri is null)
@@ -84,7 +86,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             return false;
         }
 
-        RemoteJobResponse completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, cancellationToken).ConfigureAwait(false);
+        RemoteJobResponse completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, progress, cancellationToken).ConfigureAwait(false);
         RemoteTranscriptResult result = await GetResultAsync(baseUri, config, sessionId, completedJob.JobId, cancellationToken).ConfigureAwait(false);
         WriteVtt(vttPath, result.Segments, offsetSeconds);
 
@@ -255,6 +257,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         PluginConfiguration config,
         Guid sessionId,
         string jobId,
+        Action<double>? progress,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -268,6 +271,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             response.EnsureSuccessStatusCode();
             RemoteJobResponse job = await response.Content.ReadFromJsonAsync<RemoteJobResponse>(JsonOptions, timeout.Token).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Remote caption worker returned an empty job response.");
+            progress?.Invoke(Math.Clamp(job.Progress, 0.0, 1.0));
 
             if (string.Equals(job.State, "succeeded", StringComparison.OrdinalIgnoreCase))
             {
@@ -424,6 +428,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         [property: JsonPropertyName("job_id")] string JobId,
         [property: JsonPropertyName("state")] string State,
         [property: JsonPropertyName("model")] string Model,
+        [property: JsonPropertyName("progress")] double Progress,
         [property: JsonPropertyName("error")] string? Error);
 
     private sealed record RemoteTranscriptResult(

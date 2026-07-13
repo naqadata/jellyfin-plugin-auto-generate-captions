@@ -146,7 +146,7 @@ public class AutoGenerateCaptionService
     }
 
     /// <summary>
-    /// Starts or reuses a low-priority full-item caption prefetch.
+    /// Starts or reuses a low-priority full-item background caption session.
     /// </summary>
     /// <param name="video">Likely next video item.</param>
     /// <param name="request">Prefetch request.</param>
@@ -186,6 +186,8 @@ public class AutoGenerateCaptionService
             GeneratedThroughTicks = 0,
             DurationTicks = video.RunTimeTicks,
             IsPrefetch = true,
+            Mode = CaptionGenerationModes.Full,
+            IsDiarized = config.EnableBackgroundDiarization,
             Message = "Background caption prefetch queued."
         };
 
@@ -352,6 +354,7 @@ public class AutoGenerateCaptionService
         builder.AppendLine();
         builder.AppendLine("NOTE Auto Generate Captions live endpoint");
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"NOTE session={sessionId} status={state.Status}"));
+        builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"NOTE mode={state.Mode} progressPercent={state.ProgressPercent}"));
         builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"NOTE generatedThroughTicks={state.GeneratedThroughTicks}"));
         builder.AppendLine();
 
@@ -372,7 +375,9 @@ public class AutoGenerateCaptionService
             builder.Append(TicksToTimestamp(placeholderStartTicks));
             builder.Append(" --> ");
             builder.AppendLine(TicksToTimestamp(placeholderEndTicks));
-            builder.AppendLine("*** Generator spinning up - subtitles will start soon ***");
+            builder.AppendLine(state.Mode == CaptionGenerationModes.Full
+                ? string.Create(CultureInfo.InvariantCulture, $"*** Full speaker-labeled subtitles are processing ({state.ProgressPercent}% complete) ***")
+                : "*** Generator spinning up - subtitles will start soon ***");
             builder.AppendLine();
         }
 
@@ -420,7 +425,11 @@ public class AutoGenerateCaptionService
             LiveVttUrl = string.Create(CultureInfo.InvariantCulture, $"/AutoGenerateCaptions/{state.SessionId}/live.vtt"),
             PollSeconds = state.PollSeconds,
             GeneratedThroughTicks = state.GeneratedThroughTicks,
-            HasCachedCaptions = state.HasCachedCaptions
+            HasCachedCaptions = state.HasCachedCaptions,
+            Mode = state.Mode,
+            ProgressPercent = state.ProgressPercent,
+            IsDiarized = state.IsDiarized,
+            DurationTicks = state.DurationTicks
         };
     }
 
@@ -445,6 +454,10 @@ public class AutoGenerateCaptionService
             PollSeconds = dto.PollSeconds,
             GeneratedThroughTicks = dto.GeneratedThroughTicks,
             HasCachedCaptions = dto.HasCachedCaptions,
+            Mode = dto.Mode,
+            ProgressPercent = dto.ProgressPercent,
+            IsDiarized = dto.IsDiarized,
+            DurationTicks = dto.DurationTicks,
             Ranges = ranges,
             Message = state.Message
         };
@@ -625,12 +638,14 @@ public class AutoGenerateCaptionService
             {
                 TryHydrateFromCombinedCache(state, config, persistentCacheDirectory);
                 state.GeneratedThroughTicks = durationTicks;
+                state.ProgressPercent = 100;
                 state.Status = CaptionSessionStatuses.Cached;
                 state.Message = "Full-item generated captions were already cached.";
                 return;
             }
 
             state.Status = CaptionSessionStatuses.Generating;
+            state.ProgressPercent = 1;
             state.Message = "Extracting full audio for background caption generation.";
             await ExtractAudioChunkAsync(
                 state,
@@ -651,6 +666,7 @@ public class AutoGenerateCaptionService
                 initialPrompt: null,
                 diarize: config.EnableBackgroundDiarization,
                 sliceSeconds: Math.Clamp(config.BackgroundSliceSeconds, 60, 1800),
+                progress: progress => state.ProgressPercent = Math.Clamp(5 + (int)Math.Round(progress * 90), 5, 95),
                 state.Cancellation.Token).ConfigureAwait(false);
             if (!completed)
             {
@@ -695,6 +711,7 @@ public class AutoGenerateCaptionService
             }
 
             state.GeneratedThroughTicks = durationTicks;
+            state.ProgressPercent = 100;
             state.Status = CaptionSessionStatuses.Complete;
             state.Message = string.Create(
                 CultureInfo.InvariantCulture,
@@ -1988,6 +2005,7 @@ public class AutoGenerateCaptionService
                 initialPrompt,
                 diarize,
                 sliceSeconds,
+                progress: null,
                 state.Cancellation.Token).ConfigureAwait(false);
 
             if (completed)
@@ -2589,6 +2607,12 @@ public class AutoGenerateCaptionService
         public bool EnableOpenAiPolish { get; init; }
 
         public bool IsPrefetch { get; init; }
+
+        public string Mode { get; init; } = CaptionGenerationModes.Live;
+
+        public bool IsDiarized { get; init; }
+
+        public int ProgressPercent { get; set; }
 
         public string Status { get; set; } = CaptionSessionStatuses.WarmingUp;
 

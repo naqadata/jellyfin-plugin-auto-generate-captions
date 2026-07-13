@@ -128,7 +128,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public int LiveRevisionTailSeconds { get; set; } = 10;
 
     /// <summary>
-    /// Gets or sets a value indicating whether clients may enqueue speculative full-item caption jobs.
+    /// Gets or sets a value indicating whether clients may start full-item background caption jobs.
     /// </summary>
     public bool EnableBackgroundPrefetch { get; set; } = true;
 

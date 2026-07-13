@@ -2,7 +2,7 @@
 
 Experimental Jellyfin plugin for Roku-driven, on-demand AI caption generation.
 
-The goal is not to scan the whole library. A custom client starts a short-lived caption session when the viewer selects `Auto-Generated`, then polls a live WebVTT endpoint while the server generates and caches caption ranges.
+The plugin supports two explicit client-selected modes: rolling Live captions around the playback position, and a Full background transcription that can add speaker labels. It does not automatically scan the library or trigger work for Next Up items.
 
 ## Related Projects
 
@@ -35,8 +35,9 @@ The current implementation provides:
 - Cue-shaping controls for max cue characters, max cue words, max cue duration, regrouping, and split-gap behavior.
 - Rolling live transcription windows with a revisable tail and prior-transcript context.
 - Read-only before/after context for OpenAI caption polishing.
-- Low-priority full-item Next Up prefetch through the remote worker.
+- Explicit, low-priority full-item transcription through the remote worker.
 - Optional local worker diarization with WebVTT speaker voice tags.
+- Full-session status with real worker progress from 0-100%.
 
 ## API Contract
 
@@ -69,7 +70,10 @@ Response:
   "liveVttUrl": "/AutoGenerateCaptions/00000000-0000-0000-0000-000000000000/live.vtt",
   "pollSeconds": 2,
   "generatedThroughTicks": 1230000000,
-  "hasCachedCaptions": false
+  "hasCachedCaptions": false,
+  "mode": "live",
+  "progressPercent": 0,
+  "isDiarized": false
 }
 ```
 
@@ -92,10 +96,10 @@ Stop:
 POST /AutoGenerateCaptions/Sessions/{sessionId}/Stop
 ```
 
-Queue a likely Next Up item for low-priority full transcription:
+Explicitly start a low-priority Full transcription:
 
 ```http
-POST /AutoGenerateCaptions/Items/{itemId}/Prefetch
+POST /AutoGenerateCaptions/Items/{itemId}/Full
 Content-Type: application/json
 
 {
@@ -131,13 +135,13 @@ In this workspace, the corresponding development checkout is usually at:
 Client behavior:
 
 1. Load the server plugin list and show generated-caption UI only when this plugin is available.
-2. Add an `Auto-Generated` entry to the subtitle menu.
-3. On selection, call `POST /AutoGenerateCaptions/Items/{itemId}/Sessions`.
+2. Add `AI Auto-Generated (Live)` and, when advertised by capabilities, `AI Auto-Generated (Full)` entries to the subtitle menu.
+3. For Live, call `POST /AutoGenerateCaptions/Items/{itemId}/Sessions`. For Full, call `POST /AutoGenerateCaptions/Items/{itemId}/Full`.
 4. Set the custom caption task URL to the returned `liveVttUrl`.
 5. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
 6. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
-7. After a generated-caption session starts, submit the next queued video to the prefetch endpoint.
-8. Call the stop endpoint when playback exits or the user disables auto-generated captions.
+7. Poll Full session status to show `progressPercent` in Subtitle Tools.
+8. Call the stop endpoint when Live playback exits. Full jobs are background-owned and continue when playback pauses or exits.
 
 ## Worker Design
 
@@ -147,8 +151,8 @@ The worker should:
 - Generate a small first chunk, then expand rolling windows while keeping a revisable tail.
 - Keep `LookaheadSeconds` generated ahead of playback.
 - Send earlier transcript text as Whisper context and reconcile repeated words at committed boundaries.
-- Submit full-item prefetches at background priority in resumable worker slices.
-- Diarize completed prefetches locally on the worker when configured.
+- Submit user-requested Full transcriptions at background priority in resumable worker slices.
+- Diarize completed Full transcriptions locally on the worker when configured.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
 - Keep chunk caches for all models, but only write stitched cache output when the model is listed in `Promotable models`.
 - External subtitle promotion is planned, but not implemented yet.
@@ -184,6 +188,8 @@ Relevant plugin settings:
 - `Remote worker API key`: optional bearer token for protected workers.
 - `Remote worker model`: model requested from the worker, for example `large-v3`.
 - `Fallback to local when unavailable`: uses the local resident/per-job worker if the remote worker cannot be reached before a job starts.
+- `Enable background prefetch`: enables explicit Full transcription requests. Despite the legacy configuration name, Naqafin does not automatically prefetch Next Up items.
+- `Diarize background captions`: adds speaker labels to Full transcriptions and advertises the Full mode to Naqafin.
 
 Remote jobs that start and then fail are treated as generation failures. That avoids silently restarting a long failed remote job on the weaker Jellyfin server.
 

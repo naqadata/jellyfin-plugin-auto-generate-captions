@@ -1,7 +1,7 @@
 namespace Jellyfin.Plugin.AutoGenerateCaptions.Models;
 
 /// <summary>
-/// Request body for speculative full-item caption generation.
+/// Request body for full-item background caption generation.
 /// </summary>
 public class PrefetchCaptionRequest
 {

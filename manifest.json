@@ -102,6 +102,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.2.0.zip",
         "checksum": "fc94acb02595b07992d71286d50fe24b",
         "timestamp": "2026-07-13T05:14:28Z"
+      },
+      {
+        "version": "0.3.0.0",
+        "changelog": "Add explicit Live and Full caption modes with progress reporting",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.3.0.zip",
+        "checksum": "02965d54d7033346845eac65bcbb8e03",
+        "timestamp": "2026-07-13T06:02:26Z"
       }
     ]
   }

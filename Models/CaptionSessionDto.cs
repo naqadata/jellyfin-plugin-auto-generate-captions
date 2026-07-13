@@ -54,4 +54,24 @@ public class CaptionSessionDto
     /// Gets or sets a value indicating whether cached captions were available for this session.
     /// </summary>
     public bool HasCachedCaptions { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this is a rolling live session or a full-item session.
+    /// </summary>
+    public string Mode { get; set; } = CaptionGenerationModes.Live;
+
+    /// <summary>
+    /// Gets or sets full-item processing progress from zero through one hundred.
+    /// </summary>
+    public int ProgressPercent { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether speaker diarization is enabled for this session.
+    /// </summary>
+    public bool IsDiarized { get; set; }
+
+    /// <summary>
+    /// Gets or sets the media duration in ticks when known.
+    /// </summary>
+    public long? DurationTicks { get; set; }
 }
