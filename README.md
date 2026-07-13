@@ -18,7 +18,7 @@ Stock Jellyfin clients do not currently know how to start these caption sessions
 
 ## Current State
 
-This first implementation provides:
+The current implementation provides:
 
 - Plugin configuration page.
 - Capability endpoint so clients can gate optional generated-caption controls.
@@ -33,6 +33,10 @@ This first implementation provides:
 - Parsing generated WebVTT cues back into the live endpoint.
 - Persistent partial-chunk cache and stitched cache output for promotable models.
 - Cue-shaping controls for max cue characters, max cue words, max cue duration, regrouping, and split-gap behavior.
+- Rolling live transcription windows with a revisable tail and prior-transcript context.
+- Read-only before/after context for OpenAI caption polishing.
+- Low-priority full-item Next Up prefetch through the remote worker.
+- Optional local worker diarization with WebVTT speaker voice tags.
 
 ## API Contract
 
@@ -88,6 +92,20 @@ Stop:
 POST /AutoGenerateCaptions/Sessions/{sessionId}/Stop
 ```
 
+Queue a likely Next Up item for low-priority full transcription:
+
+```http
+POST /AutoGenerateCaptions/Items/{itemId}/Prefetch
+Content-Type: application/json
+
+{
+  "mediaSourceId": null,
+  "audioStreamIndex": -1,
+  "language": "auto",
+  "enableOpenAiPolish": true
+}
+```
+
 Check server-advertised optional capabilities:
 
 ```http
@@ -118,15 +136,19 @@ Client behavior:
 4. Set the custom caption task URL to the returned `liveVttUrl`.
 5. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
 6. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
-7. Call the stop endpoint when playback exits or the user disables auto-generated captions.
+7. After a generated-caption session starts, submit the next queued video to the prefetch endpoint.
+8. Call the stop endpoint when playback exits or the user disables auto-generated captions.
 
 ## Worker Design
 
 The worker should:
 
 - Start ffmpeg at `positionTicks - 2s` where possible.
-- Generate a small first chunk, then larger steady chunks.
+- Generate a small first chunk, then expand rolling windows while keeping a revisable tail.
 - Keep `LookaheadSeconds` generated ahead of playback.
+- Send earlier transcript text as Whisper context and reconcile repeated words at committed boundaries.
+- Submit full-item prefetches at background priority in resumable worker slices.
+- Diarize completed prefetches locally on the worker when configured.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
 - Keep chunk caches for all models, but only write stitched cache output when the model is listed in `Promotable models`.
 - External subtitle promotion is planned, but not implemented yet.

@@ -113,6 +113,36 @@ public class PluginConfiguration : BasePluginConfiguration
     public int LookaheadSeconds { get; set; } = 90;
 
     /// <summary>
+    /// Gets or sets a value indicating whether promotable remote models should use larger rolling live windows.
+    /// </summary>
+    public bool EnableRollingLiveWindows { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the rolling live audio window size used by promotable remote models.
+    /// </summary>
+    public int RollingLiveChunkSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// Gets or sets the uncommitted tail that is retranscribed with the next live window.
+    /// </summary>
+    public int LiveRevisionTailSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether clients may enqueue speculative full-item caption jobs.
+    /// </summary>
+    public bool EnableBackgroundPrefetch { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the resumable worker slice size for full-item background jobs.
+    /// </summary>
+    public int BackgroundSliceSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether full-item background jobs should perform speaker diarization.
+    /// </summary>
+    public bool EnableBackgroundDiarization { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether buffered live captions should be polished with OpenAI.
     /// </summary>
     public bool EnableOpenAiCaptionPolish { get; set; }

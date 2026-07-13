@@ -25,11 +25,13 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 20;
+    private const int GenerationPipelineVersion = 21;
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
+    private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
+    private readonly ConcurrentDictionary<string, Guid> _prefetchByCacheKey = new(StringComparer.Ordinal);
     private readonly IApplicationPaths _applicationPaths;
     private readonly ResidentWhisperWorker _residentWhisperWorker;
     private readonly RemoteCaptionWorkerClient _remoteCaptionWorkerClient;
@@ -86,6 +88,7 @@ public class AutoGenerateCaptionService
             PollSeconds = Math.Clamp(config.PollSeconds, 1, 30),
             StartPositionTicks = Math.Max(0, request.PositionTicks),
             GeneratedThroughTicks = Math.Max(0, request.PositionTicks),
+            DurationTicks = video.RunTimeTicks,
             Message = "Session created. Preparing caption generation."
         };
 
@@ -143,6 +146,73 @@ public class AutoGenerateCaptionService
     }
 
     /// <summary>
+    /// Starts or reuses a low-priority full-item caption prefetch.
+    /// </summary>
+    /// <param name="video">Likely next video item.</param>
+    /// <param name="request">Prefetch request.</param>
+    /// <returns>Background caption session.</returns>
+    public CaptionSessionDto StartPrefetch(Video video, PrefetchCaptionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(video);
+        ArgumentNullException.ThrowIfNull(request);
+
+        PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        if (!config.EnableBackgroundPrefetch || !config.EnableRemoteWorker || string.IsNullOrWhiteSpace(config.RemoteWorkerUrl))
+        {
+            throw new InvalidOperationException("Background caption prefetch requires an enabled remote caption worker.");
+        }
+
+        if (!IsPromotableModel(config, config.RemoteWorkerModel))
+        {
+            throw new InvalidOperationException("Background caption prefetch is limited to promotable remote models.");
+        }
+
+        string language = string.IsNullOrWhiteSpace(request.Language)
+            ? config.DefaultLanguage
+            : request.Language.Trim();
+        var state = new CaptionSessionState
+        {
+            SessionId = Guid.NewGuid(),
+            ItemId = video.Id,
+            ItemName = GetDisplayName(video),
+            MediaPath = video.Path,
+            MediaSourceId = request.MediaSourceId,
+            AudioStreamIndex = request.AudioStreamIndex,
+            Language = language,
+            EnableOpenAiPolish = request.EnableOpenAiPolish ?? config.EnableOpenAiCaptionPolish,
+            Status = CaptionSessionStatuses.WarmingUp,
+            PollSeconds = Math.Clamp(config.PollSeconds, 1, 30),
+            StartPositionTicks = 0,
+            GeneratedThroughTicks = 0,
+            DurationTicks = video.RunTimeTicks,
+            IsPrefetch = true,
+            Message = "Background caption prefetch queued."
+        };
+
+        string cacheRoot = GetCacheRoot(config);
+        string cacheDirectory = GetPersistentCacheDirectory(state, config, cacheRoot);
+        string cacheKey = state.CacheKey ?? video.Id.ToString("N");
+        if (_prefetchByCacheKey.TryGetValue(cacheKey, out Guid existingId)
+            && _sessions.TryGetValue(existingId, out CaptionSessionState? existing)
+            && IsActiveGenerationStatus(existing.Status))
+        {
+            return ToDto(existing);
+        }
+
+        _sessions[state.SessionId] = state;
+        _prefetchByCacheKey[cacheKey] = state.SessionId;
+        _logger.LogInformation(
+            "Queued auto-caption background prefetch {SessionId} for {ItemName}; cacheKey={CacheKey}; diarize={Diarize}; sliceSeconds={SliceSeconds}",
+            state.SessionId,
+            state.ItemName,
+            cacheKey,
+            config.EnableBackgroundDiarization,
+            config.BackgroundSliceSeconds);
+        _ = Task.Run(() => GeneratePrefetchAsync(state, config, cacheDirectory));
+        return ToDto(state);
+    }
+
+    /// <summary>
     /// Gets session status.
     /// </summary>
     /// <param name="sessionId">Session id.</param>
@@ -181,7 +251,11 @@ public class AutoGenerateCaptionService
         PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
         return new
         {
-            OpenAiCaptionPolishAvailable = IsOpenAiCaptionPolishConfigured(config)
+            OpenAiCaptionPolishAvailable = IsOpenAiCaptionPolishConfigured(config),
+            BackgroundPrefetchAvailable = config.EnableBackgroundPrefetch
+                && config.EnableRemoteWorker
+                && IsPromotableModel(config, config.RemoteWorkerModel),
+            BackgroundDiarizationEnabled = config.EnableBackgroundDiarization
         };
     }
 
@@ -308,7 +382,19 @@ public class AutoGenerateCaptionService
             builder.Append(TicksToTimestamp(cue.StartTicks));
             builder.Append(" --> ");
             builder.AppendLine(TicksToTimestamp(cue.EndTicks));
-            builder.AppendLine(cue.Text);
+            if (string.IsNullOrWhiteSpace(cue.Speaker))
+            {
+                builder.AppendLine(cue.Text);
+            }
+            else
+            {
+                string speaker = cue.Speaker.Replace(">", string.Empty, StringComparison.Ordinal).Trim();
+                builder.Append("<v ");
+                builder.Append(speaker);
+                builder.Append('>');
+                builder.Append(cue.Text);
+                builder.AppendLine("</v>");
+            }
             builder.AppendLine();
         }
 
@@ -413,19 +499,29 @@ public class AutoGenerateCaptionService
 
         double nextStartSeconds = Math.Max(0, state.StartPositionTicks / (double)TicksPerSecond);
         int initialChunkSeconds = Math.Clamp(config.InitialChunkSeconds, 3, 60);
-        int steadyChunkSeconds = Math.Clamp(config.ChunkSeconds, 5, 120);
+        bool useRollingWindows = config.EnableRollingLiveWindows
+            && config.EnableRemoteWorker
+            && IsPromotableModel(config, config.RemoteWorkerModel);
+        int steadyChunkSeconds = useRollingWindows
+            ? Math.Clamp(config.RollingLiveChunkSeconds, 30, 300)
+            : Math.Clamp(config.ChunkSeconds, 5, 120);
         int chunkOverlapSeconds = Math.Min(Math.Clamp(config.ChunkOverlapSeconds, 0, 15), steadyChunkSeconds / 2);
-        int lookaheadSeconds = Math.Clamp(config.LookaheadSeconds, steadyChunkSeconds, 300);
+        int revisionTailSeconds = useRollingWindows
+            ? Math.Min(Math.Clamp(config.LiveRevisionTailSeconds, 3, 30), steadyChunkSeconds / 3)
+            : 0;
+        int lookaheadSeconds = Math.Clamp(config.LookaheadSeconds, steadyChunkSeconds, 1800);
         int idleDelaySeconds = Math.Clamp(config.PollSeconds, 1, 10);
         int chunkIndex = 0;
 
         _logger.LogInformation(
-            "Auto-caption generation loop start for session {SessionId}: nextStartSeconds={NextStartSeconds}; initialChunkSeconds={InitialChunkSeconds}; steadyChunkSeconds={SteadyChunkSeconds}; chunkOverlapSeconds={ChunkOverlapSeconds}; lookaheadSeconds={LookaheadSeconds}; idleDelaySeconds={IdleDelaySeconds}",
+            "Auto-caption generation loop start for session {SessionId}: nextStartSeconds={NextStartSeconds}; initialChunkSeconds={InitialChunkSeconds}; steadyChunkSeconds={SteadyChunkSeconds}; chunkOverlapSeconds={ChunkOverlapSeconds}; revisionTailSeconds={RevisionTailSeconds}; rollingWindows={RollingWindows}; lookaheadSeconds={LookaheadSeconds}; idleDelaySeconds={IdleDelaySeconds}",
             state.SessionId,
             nextStartSeconds,
             initialChunkSeconds,
             steadyChunkSeconds,
             chunkOverlapSeconds,
+            revisionTailSeconds,
+            useRollingWindows,
             lookaheadSeconds,
             idleDelaySeconds);
 
@@ -435,6 +531,14 @@ public class AutoGenerateCaptionService
             {
                 long targetTicks = state.LastClientPositionTicks + TimeSpan.FromSeconds(lookaheadSeconds).Ticks;
                 long nextStartTicks = TimeSpan.FromSeconds(nextStartSeconds).Ticks;
+                if (state.DurationTicks.HasValue && nextStartTicks >= state.DurationTicks.Value)
+                {
+                    state.GeneratedThroughTicks = state.DurationTicks.Value;
+                    state.Status = CaptionSessionStatuses.Complete;
+                    state.Message = "Caption generation reached the end of the item.";
+                    break;
+                }
+
                 if (state.GeneratedThroughTicks >= targetTicks && nextStartTicks >= targetTicks)
                 {
                     state.Message = string.Create(
@@ -471,6 +575,7 @@ public class AutoGenerateCaptionService
                     nextStartSeconds,
                     chunkSeconds,
                     chunkIndex == 0 ? 0 : chunkOverlapSeconds,
+                    chunkIndex == 0 ? 0 : revisionTailSeconds,
                     audioPath,
                     vttPath,
                     persistentCacheDirectory).ConfigureAwait(false);
@@ -490,6 +595,147 @@ public class AutoGenerateCaptionService
         }
     }
 
+    private async Task GeneratePrefetchAsync(
+        CaptionSessionState state,
+        PluginConfiguration config,
+        string persistentCacheDirectory)
+    {
+        string cacheRoot = GetCacheRoot(config);
+        string sessionDirectory = Path.Combine(cacheRoot, "sessions", state.SessionId.ToString("N"));
+        Directory.CreateDirectory(sessionDirectory);
+        string audioPath = Path.Combine(sessionDirectory, "full-audio.wav");
+        string vttPath = Path.Combine(sessionDirectory, "full-captions.vtt");
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(state.MediaPath) || !File.Exists(state.MediaPath))
+            {
+                throw new FileNotFoundException("Media path is unavailable for background caption prefetch.", state.MediaPath);
+            }
+
+            if (!state.DurationTicks.HasValue || state.DurationTicks.Value <= 0)
+            {
+                throw new InvalidOperationException("Media runtime is unavailable for background caption prefetch.");
+            }
+
+            long durationTicks = state.DurationTicks.Value;
+            CacheFileRange? completeRange = GetCachedChunkRanges(persistentCacheDirectory)
+                .FirstOrDefault(i => i.StartTicks == 0 && i.EndTicks >= durationTicks);
+            if (completeRange is not null && File.Exists(GetCombinedVttPath(persistentCacheDirectory)))
+            {
+                TryHydrateFromCombinedCache(state, config, persistentCacheDirectory);
+                state.GeneratedThroughTicks = durationTicks;
+                state.Status = CaptionSessionStatuses.Cached;
+                state.Message = "Full-item generated captions were already cached.";
+                return;
+            }
+
+            state.Status = CaptionSessionStatuses.Generating;
+            state.Message = "Extracting full audio for background caption generation.";
+            await ExtractAudioChunkAsync(
+                state,
+                config,
+                0,
+                TicksToSeconds(durationTicks),
+                audioPath).ConfigureAwait(false);
+
+            state.Message = "Background transcription and diarization queued on the remote worker.";
+            bool completed = await _remoteCaptionWorkerClient.TryTranscribeAsync(
+                config,
+                state.SessionId,
+                audioPath,
+                vttPath,
+                0,
+                state.Language,
+                "background",
+                initialPrompt: null,
+                diarize: config.EnableBackgroundDiarization,
+                sliceSeconds: Math.Clamp(config.BackgroundSliceSeconds, 60, 1800),
+                state.Cancellation.Token).ConfigureAwait(false);
+            if (!completed)
+            {
+                throw new InvalidOperationException("Remote caption worker was unavailable for background prefetch.");
+            }
+
+            IReadOnlyList<CaptionCue> cues = PrepareChunkCues(ParseVtt(vttPath, 0), 0, durationTicks);
+            lock (state.SyncRoot)
+            {
+                state.Cues.Clear();
+                state.Ranges.Clear();
+            }
+
+            foreach (CacheFileRange oldRange in GetCachedChunkRanges(persistentCacheDirectory))
+            {
+                File.Delete(oldRange.Path);
+            }
+
+            Directory.CreateDirectory(persistentCacheDirectory);
+            AddChunkResult(state, cues, 0, durationTicks);
+            WriteCacheMetadata(state, persistentCacheDirectory);
+            WriteChunkCache(state, persistentCacheDirectory, 0, 0, durationTicks, cues);
+            WriteCombinedCacheFromState(state, config, persistentCacheDirectory, config.RemoteWorkerModel);
+
+            if (state.EnableOpenAiPolish && IsOpenAiCaptionPolishConfigured(config))
+            {
+                state.LastClientPositionTicks = -TimeSpan.FromSeconds(
+                    Math.Clamp(config.OpenAiPolishGuardBandSeconds, 0, 60)).Ticks;
+                for (int pass = 0; pass < 100; pass++)
+                {
+                    long previousPolishedThrough = state.LastOpenAiPolishedThroughTicks;
+                    await TryPolishBufferedCaptionsAsync(
+                        state,
+                        config,
+                        persistentCacheDirectory,
+                        config.RemoteWorkerModel).ConfigureAwait(false);
+                    if (state.LastOpenAiPolishedThroughTicks <= previousPolishedThrough)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            state.GeneratedThroughTicks = durationTicks;
+            state.Status = CaptionSessionStatuses.Complete;
+            state.Message = string.Create(
+                CultureInfo.InvariantCulture,
+                $"Background captions complete with {state.Cues.Count} cues.");
+            _logger.LogInformation(
+                "Auto-caption background prefetch complete for session {SessionId}: item={ItemName}; cues={CueCount}; diarized={Diarized}; cache={CacheDirectory}",
+                state.SessionId,
+                state.ItemName,
+                state.Cues.Count,
+                config.EnableBackgroundDiarization,
+                persistentCacheDirectory);
+        }
+        catch (OperationCanceledException)
+        {
+            state.Status = CaptionSessionStatuses.Stopped;
+            state.Message = "Background caption prefetch cancelled.";
+            state.StoppedAt = DateTimeOffset.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Auto-caption background prefetch failed for session {SessionId}", state.SessionId);
+            FailSession(state, ex.Message);
+        }
+        finally
+        {
+            if (state.CacheKey is not null)
+            {
+                _prefetchByCacheKey.TryRemove(new KeyValuePair<string, Guid>(state.CacheKey, state.SessionId));
+            }
+
+            try
+            {
+                Directory.Delete(sessionDirectory, recursive: true);
+            }
+            catch
+            {
+                // Temporary cleanup is best-effort.
+            }
+        }
+    }
+
     private async Task<long> GenerateChunkAsync(
         CaptionSessionState state,
         PluginConfiguration config,
@@ -498,6 +744,7 @@ public class AutoGenerateCaptionService
         double startSeconds,
         int chunkSeconds,
         int overlapSeconds,
+        int revisionTailSeconds,
         string audioPath,
         string vttPath,
         string? persistentCacheDirectory)
@@ -514,9 +761,15 @@ public class AutoGenerateCaptionService
 
         Stopwatch stopwatch = Stopwatch.StartNew();
         long startTicks = TimeSpan.FromSeconds(startSeconds).Ticks;
-        long endTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks;
+        long requestedEndTicks = TimeSpan.FromSeconds(startSeconds + chunkSeconds).Ticks;
+        long windowEndTicks = state.DurationTicks.HasValue
+            ? Math.Min(requestedEndTicks, state.DurationTicks.Value)
+            : requestedEndTicks;
+        bool reachedMediaEnd = state.DurationTicks.HasValue && windowEndTicks >= state.DurationTicks.Value;
+        long revisionTailTicks = reachedMediaEnd ? 0 : TimeSpan.FromSeconds(revisionTailSeconds).Ticks;
+        long endTicks = Math.Max(startTicks, windowEndTicks - revisionTailTicks);
         double extractStartSeconds = Math.Max(0, startSeconds - overlapSeconds);
-        double extractDurationSeconds = chunkSeconds + (startSeconds - extractStartSeconds);
+        double extractDurationSeconds = Math.Max(0, TicksToSeconds(windowEndTicks) - extractStartSeconds);
         long replacementStartTicks = TimeSpan.FromSeconds(extractStartSeconds).Ticks;
 
         long? cachedEndTicks = TryUseCachedChunk(state, persistentCacheDirectory, chunkIndex, startTicks, endTicks, stopwatch);
@@ -533,7 +786,18 @@ public class AutoGenerateCaptionService
         }
 
         state.Message = string.Create(CultureInfo.InvariantCulture, $"Transcribing caption chunk {chunkIndex}.");
-        TranscriptionResult transcription = await RunTranscriptionWorkerAsync(state, config, workerScriptPath, audioPath, vttPath, extractStartSeconds).ConfigureAwait(false);
+        string? initialPrompt = BuildWhisperContextPrompt(state, startTicks);
+        TranscriptionResult transcription = await RunTranscriptionWorkerAsync(
+            state,
+            config,
+            workerScriptPath,
+            audioPath,
+            vttPath,
+            extractStartSeconds,
+            initialPrompt,
+            "live",
+            diarize: false,
+            sliceSeconds: 0).ConfigureAwait(false);
 
         if (state.Cancellation.IsCancellationRequested)
         {
@@ -541,6 +805,7 @@ public class AutoGenerateCaptionService
         }
 
         IReadOnlyList<CaptionCue> cues = PrepareChunkCues(ParseVtt(vttPath, chunkIndex), startTicks, endTicks);
+        cues = TrimRepeatedBoundaryText(state, cues, startTicks);
         AddChunkResult(state, cues, startTicks, endTicks);
 
         if (persistentCacheDirectory is not null)
@@ -914,9 +1179,97 @@ public class AutoGenerateCaptionService
             .ToArray();
     }
 
+    private static IReadOnlyList<CaptionCue> TrimRepeatedBoundaryText(
+        CaptionSessionState state,
+        IReadOnlyList<CaptionCue> cues,
+        long boundaryTicks)
+    {
+        if (cues.Count == 0 || boundaryTicks <= 0)
+        {
+            return cues;
+        }
+
+        string previousText;
+        lock (state.SyncRoot)
+        {
+            previousText = string.Join(
+                " ",
+                state.Cues
+                    .Where(i => i.EndTicks <= boundaryTicks)
+                    .OrderByDescending(i => i.EndTicks)
+                    .Take(5)
+                    .OrderBy(i => i.StartTicks)
+                    .Select(i => NormalizeCueText(i.Text)));
+        }
+
+        string[] previousWords = previousText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string[] currentWords = NormalizeCueText(cues[0].Text).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        int maximumOverlap = Math.Min(Math.Min(previousWords.Length, currentWords.Length), 12);
+        int overlapWords = 0;
+        for (int count = maximumOverlap; count >= 2; count--)
+        {
+            bool matches = true;
+            for (int i = 0; i < count; i++)
+            {
+                string previous = previousWords[previousWords.Length - count + i].Trim(',', '.', '?', '!', ';', ':', '-', '"').ToLowerInvariant();
+                string current = currentWords[i].Trim(',', '.', '?', '!', ';', ':', '-', '"').ToLowerInvariant();
+                if (!string.Equals(previous, current, StringComparison.Ordinal))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                overlapWords = count;
+                break;
+            }
+        }
+
+        if (overlapWords == 0)
+        {
+            return cues;
+        }
+
+        var trimmed = cues.ToList();
+        string replacement = string.Join(' ', currentWords.Skip(overlapWords));
+        if (string.IsNullOrWhiteSpace(replacement))
+        {
+            trimmed.RemoveAt(0);
+        }
+        else
+        {
+            trimmed[0] = trimmed[0] with { Text = replacement };
+        }
+
+        return trimmed;
+    }
+
     private static string NormalizeCueText(string text)
     {
         return WhitespaceRegex.Replace(text.Trim(), " ");
+    }
+
+    private static string? BuildWhisperContextPrompt(CaptionSessionState state, long beforeTicks)
+    {
+        lock (state.SyncRoot)
+        {
+            string context = string.Join(
+                " ",
+                state.Cues
+                    .Where(i => i.EndTicks <= beforeTicks)
+                    .OrderByDescending(i => i.EndTicks)
+                    .Take(20)
+                    .OrderBy(i => i.StartTicks)
+                    .Select(i => NormalizeCueText(i.Text)));
+            if (context.Length > 2000)
+            {
+                context = context[^2000..];
+            }
+
+            return string.IsNullOrWhiteSpace(context) ? null : context;
+        }
     }
 
     private async Task TryPolishBufferedCaptionsAsync(
@@ -932,7 +1285,9 @@ public class AutoGenerateCaptionService
 
         int requiredLookaheadSeconds = Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600);
         int guardBandSeconds = Math.Clamp(config.OpenAiPolishGuardBandSeconds, 0, 60);
-        int polishCueCount = Math.Clamp(config.OpenAiPolishCueCount, 2, 80);
+        int polishCueCount = state.IsPrefetch
+            ? 80
+            : Math.Clamp(config.OpenAiPolishCueCount, 2, 80);
         long requiredLookaheadTicks = TimeSpan.FromSeconds(requiredLookaheadSeconds).Ticks;
         long clientPositionTicks = state.LastClientPositionTicks;
         long generatedThroughTicks = state.GeneratedThroughTicks;
@@ -949,6 +1304,8 @@ public class AutoGenerateCaptionService
         }
 
         List<CaptionCue> cues;
+        List<CaptionCue> contextBefore;
+        List<CaptionCue> contextAfter;
         long polishStartTicks;
         long polishEndTicks;
         lock (state.SyncRoot)
@@ -971,6 +1328,15 @@ public class AutoGenerateCaptionService
 
             polishStartTicks = cues[0].StartTicks;
             polishEndTicks = cues[^1].EndTicks;
+            long contextWindowTicks = TimeSpan.FromSeconds(Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800)).Ticks;
+            contextBefore = state.Cues
+                .Where(i => i.EndTicks <= polishStartTicks && i.EndTicks >= polishStartTicks - contextWindowTicks)
+                .OrderBy(i => i.StartTicks)
+                .ToList();
+            contextAfter = state.Cues
+                .Where(i => i.StartTicks >= polishEndTicks && i.StartTicks <= polishEndTicks + contextWindowTicks)
+                .OrderBy(i => i.StartTicks)
+                .ToList();
             state.OpenAiPolishRunning = true;
         }
 
@@ -980,6 +1346,8 @@ public class AutoGenerateCaptionService
                 state.SessionId,
                 config,
                 cues,
+                contextBefore,
+                contextAfter,
                 polishStartTicks,
                 polishEndTicks,
                 state.Cancellation.Token).ConfigureAwait(false);
@@ -1037,6 +1405,8 @@ public class AutoGenerateCaptionService
         Guid sessionId,
         PluginConfiguration config,
         IReadOnlyList<CaptionCue> cues,
+        IReadOnlyList<CaptionCue> contextBefore,
+        IReadOnlyList<CaptionCue> contextAfter,
         long windowStartTicks,
         long windowEndTicks,
         CancellationToken cancellationToken)
@@ -1071,11 +1441,26 @@ public class AutoGenerateCaptionService
                             {
                                 window_start_ms = TicksToMilliseconds(windowStartTicks),
                                 window_end_ms = TicksToMilliseconds(windowEndTicks),
-                                cues = cues.Select(i => new
+                                context_before = contextBefore.Select(i => new
                                 {
                                     start_ms = TicksToMilliseconds(i.StartTicks),
                                     end_ms = TicksToMilliseconds(i.EndTicks),
-                                    text = NormalizeCueText(i.Text)
+                                    text = NormalizeCueText(i.Text),
+                                    speaker = i.Speaker
+                                }),
+                                editable_cues = cues.Select(i => new
+                                {
+                                    start_ms = TicksToMilliseconds(i.StartTicks),
+                                    end_ms = TicksToMilliseconds(i.EndTicks),
+                                    text = NormalizeCueText(i.Text),
+                                    speaker = i.Speaker
+                                }),
+                                context_after = contextAfter.Select(i => new
+                                {
+                                    start_ms = TicksToMilliseconds(i.StartTicks),
+                                    end_ms = TicksToMilliseconds(i.EndTicks),
+                                    text = NormalizeCueText(i.Text),
+                                    speaker = i.Speaker
                                 })
                             }, JsonOptions)
                         }
@@ -1107,9 +1492,10 @@ public class AutoGenerateCaptionService
                                     {
                                         start_ms = new { type = "integer" },
                                         end_ms = new { type = "integer" },
-                                        text = new { type = "string" }
+                                        text = new { type = "string" },
+                                        speaker = new { type = new[] { "string", "null" } }
                                     },
-                                    required = new[] { "start_ms", "end_ms", "text" }
+                                    required = new[] { "start_ms", "end_ms", "text", "speaker" }
                                 }
                             }
                         },
@@ -1144,7 +1530,11 @@ public class AutoGenerateCaptionService
             throw new InvalidOperationException("OpenAI caption polish returned no cues.");
         }
 
-        IReadOnlyList<CaptionCue> polished = ValidatePolishedCues(parsed.Cues, windowStartTicks, windowEndTicks);
+        IReadOnlyList<CaptionCue> polished = ValidatePolishedCues(
+            parsed.Cues,
+            cues,
+            windowStartTicks,
+            windowEndTicks);
         if (polished.Count > cues.Count * 3)
         {
             throw new InvalidOperationException(string.Create(
@@ -1167,7 +1557,7 @@ public class AutoGenerateCaptionService
     {
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"Clean up a future-safe group of auto-generated subtitle cues. Keep wording faithful. Improve punctuation, capitalization, and sentence flow. You may move words between neighboring cues, split cues, or merge cues when it makes the sentence structure more coherent. Prefer cue boundaries at sentence boundaries, clause boundaries, or natural speech pauses. Do not leave one- or two-word fragments at the beginning or end of a cue when they grammatically belong to a neighboring cue. If a cue begins with an orphaned conjunction, pronoun, article, preposition, or phrase that belongs to the previous sentence, move it to the previous cue when timing allows. If a cue ends with the first word or phrase of the next sentence, move it to the next cue when timing allows. Prefer sentence-level cues when timing allows. Hard rule: if a cue would contain more than {maxCueWords} words, split it into two or more consecutive cues with roughly even word counts, preserving phrase boundaries and natural pauses. Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated syllables requires it. Adjust returned cue timestamps within the provided time range to match natural cue boundaries; when splitting a long cue, divide its time range proportionally across the new cues. Keep all returned cue timestamps inside the provided time range. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor, mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only cues inside the provided time range.");
+            $"Clean up the editable_cues in a future-safe group of auto-generated subtitles. context_before and context_after are read-only context: use them to understand sentence flow, but never return or rewrite them. Preserve every speaker value exactly, including null, and never move words between cues with different speakers. Keep wording faithful. Improve punctuation, capitalization, and sentence flow. You may move words between neighboring editable cues with the same speaker, split editable cues, or merge editable cues with the same speaker when it makes the sentence structure more coherent. Prefer cue boundaries at sentence boundaries, clause boundaries, or natural speech pauses. Do not leave one- or two-word fragments at the beginning or end of a cue when they grammatically belong to a neighboring cue. If a cue begins with an orphaned conjunction, pronoun, article, preposition, or phrase that belongs to the previous sentence, use the read-only context to punctuate it correctly without returning the context cue. Prefer sentence-level cues when timing allows. Hard rule: if a cue would contain more than {maxCueWords} words, split it into two or more consecutive cues with roughly even word counts, preserving phrase boundaries and natural pauses. Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated syllables requires it. Adjust returned cue timestamps within the provided editable time range to match natural cue boundaries; when splitting a long cue, divide its time range proportionally across the new cues. Keep all returned cue timestamps inside the provided time range. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor, mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only rewritten editable cues.");
     }
 
     private static string ExtractOpenAiOutputText(string responseText)
@@ -1218,6 +1608,7 @@ public class AutoGenerateCaptionService
 
     private static IReadOnlyList<CaptionCue> ValidatePolishedCues(
         IReadOnlyList<OpenAiCaptionCue> cues,
+        IReadOnlyList<CaptionCue> anchors,
         long windowStartTicks,
         long windowEndTicks)
     {
@@ -1239,11 +1630,24 @@ public class AutoGenerateCaptionService
                 continue;
             }
 
+            string?[] overlappingSpeakers = anchors
+                .Where(i => i.EndTicks > startTicks && i.StartTicks < endTicks)
+                .Select(i => i.Speaker)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (overlappingSpeakers.Length != 1
+                || !string.Equals(overlappingSpeakers[0], cue.Speaker, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "OpenAI caption polish changed or crossed a speaker boundary.");
+            }
+
             output.Add(new CaptionCue(
                 string.Create(CultureInfo.InvariantCulture, $"openai-{output.Count:000000}"),
                 startTicks,
                 endTicks,
-                text));
+                text,
+                cue.Speaker));
             previousStartTicks = startTicks;
         }
 
@@ -1446,6 +1850,8 @@ public class AutoGenerateCaptionService
             "openai-polish:on",
             "direct-openai-cues:v1",
             "balanced-long-cues:v1",
+            "read-only-context:v1",
+            "speaker-preserving:v1",
             GetOpenAiCaptionPolishModel(config),
             Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture),
@@ -1548,7 +1954,17 @@ public class AutoGenerateCaptionService
         ];
     }
 
-    private async Task<TranscriptionResult> RunTranscriptionWorkerAsync(CaptionSessionState state, PluginConfiguration config, string workerScriptPath, string audioPath, string vttPath, double startSeconds)
+    private async Task<TranscriptionResult> RunTranscriptionWorkerAsync(
+        CaptionSessionState state,
+        PluginConfiguration config,
+        string workerScriptPath,
+        string audioPath,
+        string vttPath,
+        double startSeconds,
+        string? initialPrompt,
+        string priority,
+        bool diarize,
+        int sliceSeconds)
     {
         if (config.EnableRemoteWorker && !string.IsNullOrWhiteSpace(config.RemoteWorkerUrl))
         {
@@ -1568,6 +1984,10 @@ public class AutoGenerateCaptionService
                 vttPath,
                 startSeconds,
                 state.Language,
+                priority,
+                initialPrompt,
+                diarize,
+                sliceSeconds,
                 state.Cancellation.Token).ConfigureAwait(false);
 
             if (completed)
@@ -1807,6 +2227,10 @@ public class AutoGenerateCaptionService
             config.FallbackModel,
             config.PreferredBackend,
             Math.Clamp(config.ChunkOverlapSeconds, 0, 15).ToString(CultureInfo.InvariantCulture),
+            config.EnableRollingLiveWindows.ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.RollingLiveChunkSeconds, 30, 300).ToString(CultureInfo.InvariantCulture),
+            Math.Clamp(config.LiveRevisionTailSeconds, 3, 30).ToString(CultureInfo.InvariantCulture),
+            config.EnableBackgroundDiarization.ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.VadThreshold, 0.05, 0.95).ToString("0.###", CultureInfo.InvariantCulture),
             config.EnableRegrouping.ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.RegroupSplitGapSeconds, 0.1, 2.0).ToString("0.###", CultureInfo.InvariantCulture),
@@ -2046,11 +2470,20 @@ public class AutoGenerateCaptionService
                 continue;
             }
 
+            string text = string.Join('\n', textLines);
+            Match voiceMatch = VoiceTagRegex.Match(text);
+            string? speaker = voiceMatch.Success ? voiceMatch.Groups["speaker"].Value.Trim() : null;
+            if (voiceMatch.Success)
+            {
+                text = voiceMatch.Groups["text"].Value;
+            }
+
             cues.Add(new CaptionCue(
                 string.Create(CultureInfo.InvariantCulture, $"chunk-{chunkIndex:000}-{id}"),
                 TimestampToTicks(match.Groups["start"].Value),
                 TimestampToTicks(match.Groups["end"].Value),
-                string.Join('\n', textLines)));
+                text,
+                speaker));
         }
 
         return cues;
@@ -2069,7 +2502,15 @@ public class AutoGenerateCaptionService
             writer.Write(TicksToTimestamp(cue.StartTicks));
             writer.Write(" --> ");
             writer.WriteLine(TicksToTimestamp(cue.EndTicks));
-            writer.WriteLine(cue.Text);
+            if (string.IsNullOrWhiteSpace(cue.Speaker))
+            {
+                writer.WriteLine(cue.Text);
+            }
+            else
+            {
+                string speaker = cue.Speaker.Replace(">", string.Empty, StringComparison.Ordinal).Trim();
+                writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"<v {speaker}>{cue.Text}</v>"));
+            }
             writer.WriteLine();
             index++;
         }
@@ -2147,6 +2588,8 @@ public class AutoGenerateCaptionService
 
         public bool EnableOpenAiPolish { get; init; }
 
+        public bool IsPrefetch { get; init; }
+
         public string Status { get; set; } = CaptionSessionStatuses.WarmingUp;
 
         public int PollSeconds { get; init; }
@@ -2154,6 +2597,8 @@ public class AutoGenerateCaptionService
         public long StartPositionTicks { get; init; }
 
         public long GeneratedThroughTicks { get; set; }
+
+        public long? DurationTicks { get; init; }
 
         public long LastClientPositionTicks { get; set; }
 
@@ -2178,7 +2623,7 @@ public class AutoGenerateCaptionService
         public CancellationTokenSource Cancellation { get; } = new();
     }
 
-    private sealed record CaptionCue(string Id, long StartTicks, long EndTicks, string Text);
+    private sealed record CaptionCue(string Id, long StartTicks, long EndTicks, string Text, string? Speaker = null);
 
     private sealed record CacheFileRange(string Path, long StartTicks, long EndTicks);
 
@@ -2211,5 +2656,6 @@ public class AutoGenerateCaptionService
     private sealed record OpenAiCaptionCue(
         [property: JsonPropertyName("start_ms")] long StartMs,
         [property: JsonPropertyName("end_ms")] long EndMs,
-        [property: JsonPropertyName("text")] string Text);
+        [property: JsonPropertyName("text")] string Text,
+        [property: JsonPropertyName("speaker")] string? Speaker);
 }

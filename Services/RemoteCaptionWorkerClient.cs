@@ -40,6 +40,10 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
     /// <param name="vttPath">Output VTT file path.</param>
     /// <param name="offsetSeconds">Timestamp offset in seconds.</param>
     /// <param name="language">Language hint.</param>
+    /// <param name="priority">Worker scheduling priority.</param>
+    /// <param name="initialPrompt">Optional transcript context from the preceding live window.</param>
+    /// <param name="diarize">Whether to perform speaker diarization.</param>
+    /// <param name="sliceSeconds">Background transcription slice size, or zero for one pass.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><c>true</c> when remote transcription completed; <c>false</c> when remote is unavailable before a job starts.</returns>
     public async Task<bool> TryTranscribeAsync(
@@ -49,6 +53,10 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         string vttPath,
         double offsetSeconds,
         string language,
+        string priority,
+        string? initialPrompt,
+        bool diarize,
+        int sliceSeconds,
         CancellationToken cancellationToken)
     {
         if (!TryGetBaseUri(config, out Uri? baseUri) || baseUri is null)
@@ -60,7 +68,17 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             return false;
         }
 
-        RemoteJobResponse? job = await SubmitJobAsync(baseUri, config, sessionId, audioPath, language, cancellationToken).ConfigureAwait(false);
+        RemoteJobResponse? job = await SubmitJobAsync(
+            baseUri,
+            config,
+            sessionId,
+            audioPath,
+            language,
+            priority,
+            initialPrompt,
+            diarize,
+            sliceSeconds,
+            cancellationToken).ConfigureAwait(false);
         if (job is null)
         {
             return false;
@@ -150,6 +168,10 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         Guid sessionId,
         string audioPath,
         string language,
+        string priority,
+        string? initialPrompt,
+        bool diarize,
+        int sliceSeconds,
         CancellationToken cancellationToken)
     {
         try
@@ -162,19 +184,31 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             form.Add(new StringContent(GetRemoteModel(config)), "model");
             form.Add(new StringContent(NormalizeLanguage(language)), "language");
             form.Add(new StringContent("json"), "output_format");
+            form.Add(new StringContent(priority), "priority");
             form.Add(new StringContent(Math.Clamp(config.VadThreshold, 0.05, 0.95).ToString("0.###", CultureInfo.InvariantCulture)), "vad_threshold");
             form.Add(new StringContent(config.EnableRegrouping ? "true" : "false"), "enable_regrouping");
             form.Add(new StringContent(Math.Clamp(config.RegroupSplitGapSeconds, 0.1, 2.0).ToString("0.###", CultureInfo.InvariantCulture)), "regroup_split_gap_seconds");
             form.Add(new StringContent(Math.Clamp(config.MaxCueCharacters, 20, 180).ToString(CultureInfo.InvariantCulture)), "max_cue_characters");
             form.Add(new StringContent(Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture)), "max_cue_words");
             form.Add(new StringContent(Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture)), "max_cue_duration_seconds");
+            if (!string.IsNullOrWhiteSpace(initialPrompt))
+            {
+                form.Add(new StringContent(initialPrompt), "initial_prompt");
+            }
+
+            form.Add(new StringContent(diarize ? "true" : "false"), "diarize");
+            form.Add(new StringContent(Math.Clamp(sliceSeconds, 0, 1800).ToString(CultureInfo.InvariantCulture)), "slice_seconds");
 
             _logger.LogInformation(
-                "Auto-caption remote worker submit for session {SessionId}: worker={WorkerUrl}; model={Model}; language={Language}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}",
+                "Auto-caption remote worker submit for session {SessionId}: worker={WorkerUrl}; priority={Priority}; model={Model}; language={Language}; diarize={Diarize}; sliceSeconds={SliceSeconds}; initialPromptChars={InitialPromptChars}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}",
                 sessionId,
                 baseUri,
+                priority,
                 GetRemoteModel(config),
                 NormalizeLanguage(language),
+                diarize,
+                sliceSeconds,
+                initialPrompt?.Length ?? 0,
                 config.EnableRegrouping,
                 config.RegroupSplitGapSeconds,
                 config.MaxCueCharacters,
@@ -336,7 +370,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             double rawEnd = offsetSeconds + segment.End;
             double start = Math.Max(0, rawStart - 0.05);
             double end = Math.Max(rawEnd + 0.5, start + 1.1);
-            cues.Add(new RemoteCue(start, end, text));
+            cues.Add(new RemoteCue(start, end, text, segment.Speaker));
         }
 
         for (int i = 0; i < cues.Count - 1; i++)
@@ -359,7 +393,14 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"{FormatTimestamp(cue.Start)} --> {FormatTimestamp(cue.End)}"));
-            output.WriteLine(cue.Text);
+            string cueText = cue.Text;
+            if (!string.IsNullOrWhiteSpace(cue.Speaker))
+            {
+                string speaker = cue.Speaker.Replace(">", string.Empty, StringComparison.Ordinal).Trim();
+                cueText = string.Create(CultureInfo.InvariantCulture, $"<v {speaker}>{cueText}</v>");
+            }
+
+            output.WriteLine(cueText);
             output.WriteLine();
         }
     }
@@ -394,12 +435,13 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         [property: JsonPropertyName("start")] double Start,
         [property: JsonPropertyName("end")] double End,
         [property: JsonPropertyName("text")] string Text,
-        [property: JsonPropertyName("words")] List<RemoteWord>? Words);
+        [property: JsonPropertyName("words")] List<RemoteWord>? Words,
+        [property: JsonPropertyName("speaker")] string? Speaker);
 
     private sealed record RemoteWord(
         [property: JsonPropertyName("start")] double Start,
         [property: JsonPropertyName("end")] double End,
         [property: JsonPropertyName("text")] string Text);
 
-    private sealed record RemoteCue(double Start, double End, string Text);
+    private sealed record RemoteCue(double Start, double End, string Text, string? Speaker);
 }

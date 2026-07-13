@@ -119,8 +119,43 @@
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="LookaheadSeconds">Lookahead seconds</label>
-                        <input id="LookaheadSeconds" name="LookaheadSeconds" type="number" is="emby-input" min="10" max="600" />
+                        <input id="LookaheadSeconds" name="LookaheadSeconds" type="number" is="emby-input" min="10" max="1800" />
                         <div class="fieldDescription">Target amount of captions to keep generated ahead of the current playback position.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableRollingLiveWindows" name="EnableRollingLiveWindows" type="checkbox" is="emby-checkbox" />
+                            <span>Use rolling live windows on promotable remote models</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Use larger, revisable live windows when a high-quality remote model is available.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RollingLiveChunkSeconds">Rolling live window seconds</label>
+                        <input id="RollingLiveChunkSeconds" name="RollingLiveChunkSeconds" type="number" is="emby-input" min="30" max="300" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LiveRevisionTailSeconds">Live revision tail seconds</label>
+                        <input id="LiveRevisionTailSeconds" name="LiveRevisionTailSeconds" type="number" is="emby-input" min="3" max="30" />
+                        <div class="fieldDescription">Audio retained at the end of a rolling window and retranscribed in the next window.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableBackgroundPrefetch" name="EnableBackgroundPrefetch" type="checkbox" is="emby-checkbox" />
+                            <span>Allow speculative full-item prefetch</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Let supported clients queue likely Next Up items at background priority.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="BackgroundSliceSeconds">Background worker slice seconds</label>
+                        <input id="BackgroundSliceSeconds" name="BackgroundSliceSeconds" type="number" is="emby-input" min="60" max="1800" />
+                        <div class="fieldDescription">Background transcription yields to waiting live work after each slice.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="EnableBackgroundDiarization" name="EnableBackgroundDiarization" type="checkbox" is="emby-checkbox" />
+                            <span>Diarize background captions</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Run local speaker diarization after a full-item background transcription. Requires the worker's Hugging Face token and accepted model terms.</div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
@@ -147,7 +182,7 @@
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishWindowSeconds">OpenAI polish window seconds</label>
                         <input id="OpenAiPolishWindowSeconds" name="OpenAiPolishWindowSeconds" type="number" is="emby-input" min="30" max="1800" />
-                        <div class="fieldDescription">Legacy maximum caption span for older polish cache fingerprints.</div>
+                        <div class="fieldDescription">Read-only context span supplied before and after each editable polishing window.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishGuardBandSeconds">OpenAI polish guard band seconds</label>
@@ -275,6 +310,12 @@
                         document.querySelector('#ChunkSeconds').value = config.ChunkSeconds || 30;
                         document.querySelector('#ChunkOverlapSeconds').value = configValue(config, 'ChunkOverlapSeconds', 4);
                         document.querySelector('#LookaheadSeconds').value = config.LookaheadSeconds || 90;
+                        document.querySelector('#EnableRollingLiveWindows').checked = config.EnableRollingLiveWindows !== false;
+                        document.querySelector('#RollingLiveChunkSeconds').value = config.RollingLiveChunkSeconds || 120;
+                        document.querySelector('#LiveRevisionTailSeconds').value = config.LiveRevisionTailSeconds || 10;
+                        document.querySelector('#EnableBackgroundPrefetch').checked = config.EnableBackgroundPrefetch !== false;
+                        document.querySelector('#BackgroundSliceSeconds').value = config.BackgroundSliceSeconds || 300;
+                        document.querySelector('#EnableBackgroundDiarization').checked = !!config.EnableBackgroundDiarization;
                         document.querySelector('#EnableOpenAiCaptionPolish').checked = !!config.EnableOpenAiCaptionPolish;
                         document.querySelector('#OpenAiApiKey').value = config.OpenAiApiKey || '';
                         document.querySelector('#OpenAiCaptionPolishModel').value = config.OpenAiCaptionPolishModel || 'gpt-5.4-mini';
@@ -323,6 +364,12 @@
                         config.ChunkSeconds = numberValue('#ChunkSeconds', '30');
                         config.ChunkOverlapSeconds = numberValue('#ChunkOverlapSeconds', '4');
                         config.LookaheadSeconds = numberValue('#LookaheadSeconds', '90');
+                        config.EnableRollingLiveWindows = document.querySelector('#EnableRollingLiveWindows').checked;
+                        config.RollingLiveChunkSeconds = numberValue('#RollingLiveChunkSeconds', '120');
+                        config.LiveRevisionTailSeconds = numberValue('#LiveRevisionTailSeconds', '10');
+                        config.EnableBackgroundPrefetch = document.querySelector('#EnableBackgroundPrefetch').checked;
+                        config.BackgroundSliceSeconds = numberValue('#BackgroundSliceSeconds', '300');
+                        config.EnableBackgroundDiarization = document.querySelector('#EnableBackgroundDiarization').checked;
                         config.EnableOpenAiCaptionPolish = document.querySelector('#EnableOpenAiCaptionPolish').checked;
                         config.OpenAiApiKey = document.querySelector('#OpenAiApiKey').value.trim();
                         config.OpenAiCaptionPolishModel = document.querySelector('#OpenAiCaptionPolishModel').value.trim() || 'gpt-5.4-mini';

@@ -94,6 +94,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.1.10.zip",
         "checksum": "2a89198dc703725894160ca10d5ac597",
         "timestamp": "2026-06-24T05:12:14Z"
+      },
+      {
+        "version": "0.2.0.0",
+        "changelog": "Add rolling live captions, priority background prefetch, and speaker diarization",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.2.0.zip",
+        "checksum": "fc94acb02595b07992d71286d50fe24b",
+        "timestamp": "2026-07-13T05:14:28Z"
       }
     ]
   }

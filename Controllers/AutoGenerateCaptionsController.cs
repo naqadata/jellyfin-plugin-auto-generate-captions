@@ -50,6 +50,31 @@ public class AutoGenerateCaptionsController : ControllerBase
     }
 
     /// <summary>
+    /// Enqueues a low-priority full-item transcription for a likely next playback item.
+    /// </summary>
+    /// <param name="itemId">Video item id.</param>
+    /// <param name="request">Prefetch request.</param>
+    /// <returns>Background caption job details.</returns>
+    [HttpPost("Items/{itemId}/Prefetch")]
+    public ActionResult<CaptionSessionDto> PrefetchItem(Guid itemId, [FromBody] PrefetchCaptionRequest request)
+    {
+        BaseItem? item = _libraryManager.GetItemById(itemId);
+        if (item is not Video video)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            return Accepted(_captionService.StartPrefetch(video, request));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { Error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Gets Auto Generate Captions client-facing capabilities.
     /// </summary>
     /// <returns>Capability flags.</returns>
