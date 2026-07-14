@@ -233,6 +233,31 @@ public class AutoGenerateCaptionService
     }
 
     /// <summary>
+    /// Gets active and recent work for the administrative processing view.
+    /// </summary>
+    /// <param name="limit">Maximum number of sessions to include.</param>
+    /// <returns>A point-in-time processing snapshot.</returns>
+    public CaptionProcessingSnapshotDto GetProcessingSnapshot(int limit)
+    {
+        CaptionSessionState[] states = _sessions.Values.ToArray();
+        IReadOnlyList<CaptionProcessingJobDto> jobs = states
+            .OrderByDescending(state => IsActiveGenerationStatus(state.Status))
+            .ThenByDescending(state => state.CreatedAt)
+            .Take(Math.Clamp(limit, 1, 100))
+            .Select(ToProcessingJobDto)
+            .ToArray();
+
+        return new CaptionProcessingSnapshotDto
+        {
+            GeneratedAt = DateTimeOffset.UtcNow,
+            ActiveJobs = states.Count(state => IsActiveGenerationStatus(state.Status)),
+            QueuedWorkerJobs = states.Count(state => string.Equals(state.WorkerState, "queued", StringComparison.OrdinalIgnoreCase)),
+            RunningWorkerJobs = states.Count(state => string.Equals(state.WorkerState, "running", StringComparison.OrdinalIgnoreCase)),
+            Jobs = jobs
+        };
+    }
+
+    /// <summary>
     /// Stops a session.
     /// </summary>
     /// <param name="sessionId">Session id.</param>
@@ -257,6 +282,7 @@ public class AutoGenerateCaptionService
         state.Status = CaptionSessionStatuses.Stopped;
         state.Message = "Session stopped by client.";
         state.StoppedAt = DateTimeOffset.UtcNow;
+        state.CompletedAt = state.StoppedAt;
         state.Cancellation.Cancel();
         _logger.LogInformation("Stopped auto-caption session {SessionId}", sessionId);
         return ToStatusDto(state);
@@ -296,6 +322,7 @@ public class AutoGenerateCaptionService
             activeState.Status = CaptionSessionStatuses.Stopped;
             activeState.Message = "Session stopped because the generated caption cache was cleared.";
             activeState.StoppedAt = DateTimeOffset.UtcNow;
+            activeState.CompletedAt = activeState.StoppedAt;
             activeState.Cancellation.Cancel();
         }
 
@@ -492,8 +519,32 @@ public class AutoGenerateCaptionService
         };
     }
 
+    private static CaptionProcessingJobDto ToProcessingJobDto(CaptionSessionState state)
+    {
+        return new CaptionProcessingJobDto
+        {
+            SessionId = state.SessionId,
+            ItemId = state.ItemId,
+            ItemName = state.ItemName,
+            Mode = state.Mode,
+            Priority = state.IsPrefetch ? "background" : "live",
+            Status = state.Status,
+            ProcessingPhase = state.ProcessingPhase,
+            WorkerJobId = state.WorkerJobId,
+            WorkerState = state.WorkerState,
+            ProgressPercent = state.ProgressPercent,
+            Message = state.Message,
+            IsDiarized = state.IsDiarized,
+            Language = state.Language,
+            CreatedAt = state.CreatedAt,
+            StartedAt = state.StartedAt,
+            CompletedAt = state.CompletedAt
+        };
+    }
+
     private async Task GenerateSessionAsync(CaptionSessionState state, PluginConfiguration config)
     {
+        state.StartedAt ??= DateTimeOffset.UtcNow;
         if (string.IsNullOrWhiteSpace(state.MediaPath) || !File.Exists(state.MediaPath))
         {
             FailSession(state, string.Create(CultureInfo.InvariantCulture, $"Media path is missing or unreadable: {state.MediaPath}"));
@@ -578,6 +629,7 @@ public class AutoGenerateCaptionService
                     state.GeneratedThroughTicks = state.DurationTicks.Value;
                     state.Status = CaptionSessionStatuses.Complete;
                     state.Message = "Caption generation reached the end of the item.";
+                    state.CompletedAt = DateTimeOffset.UtcNow;
                     break;
                 }
 
@@ -642,6 +694,7 @@ public class AutoGenerateCaptionService
         PluginConfiguration config,
         string persistentCacheDirectory)
     {
+        state.StartedAt ??= DateTimeOffset.UtcNow;
         string cacheRoot = GetCacheRoot(config);
         string sessionDirectory = Path.Combine(cacheRoot, "sessions", state.SessionId.ToString("N"));
         Directory.CreateDirectory(sessionDirectory);
@@ -672,6 +725,7 @@ public class AutoGenerateCaptionService
                 state.ProcessingPhase = "complete";
                 state.Status = CaptionSessionStatuses.Cached;
                 state.Message = "Full-item generated captions were already cached.";
+                state.CompletedAt = DateTimeOffset.UtcNow;
                 return;
             }
 
@@ -700,6 +754,11 @@ public class AutoGenerateCaptionService
                 diarize: config.EnableBackgroundDiarization,
                 sliceSeconds: Math.Clamp(config.BackgroundSliceSeconds, 60, 1800),
                 progress: progress => state.ProgressPercent = Math.Clamp(5 + (int)Math.Round(progress * 90), 5, 95),
+                jobUpdate: (jobId, workerState, _) =>
+                {
+                    state.WorkerJobId = jobId;
+                    state.WorkerState = workerState;
+                },
                 diarizationDiagnosticsPath: Path.Combine(persistentCacheDirectory, "diarization-turns.json"),
                 state.Cancellation.Token).ConfigureAwait(false);
             if (!completed)
@@ -757,6 +816,7 @@ public class AutoGenerateCaptionService
             state.ProgressPercent = 100;
             state.ProcessingPhase = "complete";
             state.Status = CaptionSessionStatuses.Complete;
+            state.CompletedAt = DateTimeOffset.UtcNow;
             state.Message = string.Create(
                 CultureInfo.InvariantCulture,
                 $"Background captions complete with {state.Cues.Count} cues.");
@@ -774,6 +834,7 @@ public class AutoGenerateCaptionService
             state.ProcessingPhase = "stopped";
             state.Message = "Background caption prefetch cancelled.";
             state.StoppedAt = DateTimeOffset.UtcNow;
+            state.CompletedAt = state.StoppedAt;
         }
         catch (Exception ex)
         {
@@ -2518,6 +2579,11 @@ public class AutoGenerateCaptionService
                 diarize,
                 sliceSeconds,
                 progress: null,
+                jobUpdate: (jobId, workerState, _) =>
+                {
+                    state.WorkerJobId = jobId;
+                    state.WorkerState = workerState;
+                },
                 diarizationDiagnosticsPath: null,
                 state.Cancellation.Token).ConfigureAwait(false);
 
@@ -3238,6 +3304,7 @@ public class AutoGenerateCaptionService
     {
         state.Status = CaptionSessionStatuses.Failed;
         state.Message = message;
+        state.CompletedAt = DateTimeOffset.UtcNow;
     }
 
     private static string GetDisplayName(Video video)
@@ -3319,6 +3386,16 @@ public class AutoGenerateCaptionService
         public string? Message { get; set; }
 
         public DateTimeOffset? StoppedAt { get; set; }
+
+        public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
+
+        public DateTimeOffset? StartedAt { get; set; }
+
+        public DateTimeOffset? CompletedAt { get; set; }
+
+        public string? WorkerJobId { get; set; }
+
+        public string? WorkerState { get; set; }
 
         public List<CaptionCacheRangeDto> Ranges { get; } = [];
 

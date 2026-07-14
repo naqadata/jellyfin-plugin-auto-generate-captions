@@ -1,5 +1,6 @@
 using Jellyfin.Plugin.AutoGenerateCaptions.Models;
 using Jellyfin.Plugin.AutoGenerateCaptions.Services;
+using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
@@ -83,6 +84,18 @@ public class AutoGenerateCaptionsController : ControllerBase
     public ActionResult<object> GetCapabilities()
     {
         return Ok(_captionService.GetCapabilities());
+    }
+
+    /// <summary>
+    /// Gets active and recent caption processing jobs for the plugin administration page.
+    /// </summary>
+    /// <param name="limit">Maximum number of jobs to return.</param>
+    /// <returns>Current caption processing snapshot.</returns>
+    [HttpGet("Admin/Jobs")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<CaptionProcessingSnapshotDto> GetProcessingJobs([FromQuery] int limit = 50)
+    {
+        return Ok(_captionService.GetProcessingSnapshot(limit));
     }
 
     /// <summary>

@@ -3,12 +3,39 @@
 <head>
     <meta charset="utf-8">
     <title>Auto Generate Captions</title>
+    <style>
+        .captionTabs { display: flex; gap: .5em; margin-bottom: 1.5em; }
+        .captionTab { min-width: 8em; }
+        .captionProcessingHeader { display: flex; align-items: center; justify-content: space-between; gap: 1em; margin-bottom: 1em; }
+        .captionProcessingHeader h2 { margin: 0; }
+        .captionSummary { display: flex; flex-wrap: wrap; gap: .75em; margin-bottom: 1.25em; }
+        .captionSummaryItem { padding: .65em .9em; border-radius: .35em; background: rgba(128, 128, 128, .16); }
+        .captionSummaryValue { display: block; font-size: 1.35em; font-weight: 600; }
+        .captionJob { padding: 1em; margin-bottom: .75em; border-radius: .35em; background: rgba(128, 128, 128, .12); }
+        .captionJobHeader { display: flex; align-items: baseline; justify-content: space-between; gap: 1em; }
+        .captionJobTitle { font-size: 1.08em; font-weight: 600; }
+        .captionJobStatus { white-space: nowrap; text-transform: capitalize; }
+        .captionJobMeta { display: flex; flex-wrap: wrap; gap: .35em 1em; margin-top: .45em; opacity: .8; font-size: .9em; }
+        .captionJobMessage { margin-top: .55em; }
+        .captionProgress { height: .35em; overflow: hidden; margin-top: .8em; border-radius: .2em; background: rgba(128, 128, 128, .25); }
+        .captionProgressValue { height: 100%; background: #00a4dc; }
+        .captionEmpty { padding: 2em 1em; text-align: center; opacity: .75; }
+        .captionError { color: #ff8a80; }
+        @media (max-width: 600px) {
+            .captionJobHeader, .captionProcessingHeader { align-items: flex-start; flex-direction: column; }
+        }
+    </style>
 </head>
 <body>
     <div id="AutoGenerateCaptionsConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
         <div data-role="content">
             <div class="content-primary">
-                <form id="AutoGenerateCaptionsConfigForm">
+                <div class="captionTabs">
+                    <button id="CaptionSettingsTab" is="emby-button" type="button" class="captionTab raised emby-button"><span>Settings</span></button>
+                    <button id="CaptionProcessingTab" is="emby-button" type="button" class="captionTab emby-button"><span>Processing</span></button>
+                </div>
+                <div id="CaptionSettingsPanel">
+                    <form id="AutoGenerateCaptionsConfigForm">
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="FfmpegPath">FFmpeg path</label>
                         <input id="FfmpegPath" name="FfmpegPath" type="text" is="emby-input" />
@@ -265,7 +292,24 @@
                             <span>Save</span>
                         </button>
                     </div>
-                </form>
+                    </form>
+                </div>
+                <div id="CaptionProcessingPanel" style="display: none;">
+                    <div class="captionProcessingHeader">
+                        <div>
+                            <h2>Caption processing</h2>
+                            <div class="fieldDescription">Active and recent work since the last Jellyfin restart.</div>
+                        </div>
+                        <button id="CaptionProcessingRefresh" is="emby-button" type="button" class="raised emby-button"><span>Refresh</span></button>
+                    </div>
+                    <div class="captionSummary">
+                        <div class="captionSummaryItem"><span id="CaptionActiveCount" class="captionSummaryValue">0</span>Active</div>
+                        <div class="captionSummaryItem"><span id="CaptionQueuedCount" class="captionSummaryValue">0</span>Worker queued</div>
+                        <div class="captionSummaryItem"><span id="CaptionRunningCount" class="captionSummaryValue">0</span>Worker running</div>
+                    </div>
+                    <div id="CaptionProcessingUpdated" class="fieldDescription"></div>
+                    <div id="CaptionProcessingJobs"></div>
+                </div>
             </div>
         </div>
         <script type="text/javascript">
@@ -284,6 +328,127 @@
             function configValue(config, name, fallback) {
                 return config[name] === undefined || config[name] === null ? fallback : config[name];
             }
+
+            function apiValue(value, name) {
+                if (value[name] !== undefined) {
+                    return value[name];
+                }
+                var pascalName = name.charAt(0).toUpperCase() + name.substring(1);
+                return value[pascalName];
+            }
+
+            function setCaptionTab(tab) {
+                var processing = tab === 'processing';
+                document.querySelector('#CaptionSettingsPanel').style.display = processing ? 'none' : '';
+                document.querySelector('#CaptionProcessingPanel').style.display = processing ? '' : 'none';
+                document.querySelector('#CaptionSettingsTab').classList.toggle('raised', !processing);
+                document.querySelector('#CaptionProcessingTab').classList.toggle('raised', processing);
+                if (processing) {
+                    loadCaptionProcessing();
+                    if (!AutoGenerateCaptionsConfig.processingTimer) {
+                        AutoGenerateCaptionsConfig.processingTimer = setInterval(loadCaptionProcessing, 3000);
+                    }
+                } else if (AutoGenerateCaptionsConfig.processingTimer) {
+                    clearInterval(AutoGenerateCaptionsConfig.processingTimer);
+                    AutoGenerateCaptionsConfig.processingTimer = null;
+                }
+            }
+
+            function captionText(parent, className, text) {
+                var element = document.createElement('div');
+                element.className = className;
+                element.textContent = text || '';
+                parent.appendChild(element);
+                return element;
+            }
+
+            function formatCaptionTime(value) {
+                return value ? new Date(value).toLocaleString() : 'Not started';
+            }
+
+            function captionJobStatus(job) {
+                var workerState = apiValue(job, 'workerState');
+                var mode = apiValue(job, 'mode');
+                var processingPhase = apiValue(job, 'processingPhase');
+                var status = apiValue(job, 'status');
+                if (workerState === 'queued') {
+                    return 'Queued on worker';
+                }
+                if (workerState === 'running') {
+                    return mode === 'full' ? 'Transcribing / diarizing' : 'Transcribing';
+                }
+                if (processingPhase) {
+                    return processingPhase.replace(/-/g, ' ');
+                }
+                return (status || 'unknown').replace(/-/g, ' ');
+            }
+
+            function renderCaptionProcessing(snapshot) {
+                document.querySelector('#CaptionActiveCount').textContent = apiValue(snapshot, 'activeJobs') || 0;
+                document.querySelector('#CaptionQueuedCount').textContent = apiValue(snapshot, 'queuedWorkerJobs') || 0;
+                document.querySelector('#CaptionRunningCount').textContent = apiValue(snapshot, 'runningWorkerJobs') || 0;
+                document.querySelector('#CaptionProcessingUpdated').textContent = 'Updated ' + formatCaptionTime(apiValue(snapshot, 'generatedAt'));
+
+                var jobsNode = document.querySelector('#CaptionProcessingJobs');
+                jobsNode.replaceChildren();
+                var jobs = apiValue(snapshot, 'jobs');
+                if (!jobs || jobs.length === 0) {
+                    captionText(jobsNode, 'captionEmpty', 'No caption jobs have run since Jellyfin started.');
+                    return;
+                }
+
+                jobs.forEach(function (job) {
+                    var mode = apiValue(job, 'mode');
+                    var priority = apiValue(job, 'priority');
+                    var progressPercent = apiValue(job, 'progressPercent') || 0;
+                    var workerJobId = apiValue(job, 'workerJobId');
+                    var message = apiValue(job, 'message');
+                    var card = document.createElement('div');
+                    card.className = 'captionJob';
+                    var header = document.createElement('div');
+                    header.className = 'captionJobHeader';
+                    captionText(header, 'captionJobTitle', apiValue(job, 'itemName') || 'Unknown item');
+                    captionText(header, 'captionJobStatus', captionJobStatus(job));
+                    card.appendChild(header);
+
+                    var meta = document.createElement('div');
+                    meta.className = 'captionJobMeta';
+                    captionText(meta, '', mode === 'full' ? 'Enhanced' : 'Live');
+                    captionText(meta, '', 'Priority: ' + (priority || 'unknown'));
+                    captionText(meta, '', 'Progress: ' + progressPercent + '%');
+                    captionText(meta, '', 'Created: ' + formatCaptionTime(apiValue(job, 'createdAt')));
+                    if (workerJobId) {
+                        captionText(meta, '', 'Worker: ' + workerJobId.substring(0, 8));
+                    }
+                    card.appendChild(meta);
+
+                    if (message) {
+                        captionText(card, 'captionJobMessage', message);
+                    }
+
+                    var progress = document.createElement('div');
+                    progress.className = 'captionProgress';
+                    var progressValue = document.createElement('div');
+                    progressValue.className = 'captionProgressValue';
+                    progressValue.style.width = Math.max(0, Math.min(100, progressPercent)) + '%';
+                    progress.appendChild(progressValue);
+                    card.appendChild(progress);
+                    jobsNode.appendChild(card);
+                });
+            }
+
+            function loadCaptionProcessing() {
+                var url = ApiClient.getUrl('AutoGenerateCaptions/Admin/Jobs', { limit: 50 });
+                return ApiClient.getJSON(url).then(renderCaptionProcessing).catch(function (error) {
+                    var jobsNode = document.querySelector('#CaptionProcessingJobs');
+                    jobsNode.replaceChildren();
+                    captionText(jobsNode, 'captionEmpty captionError', 'Could not load caption processing: ' + (error.message || error));
+                });
+            }
+
+            document.querySelector('#CaptionSettingsTab').addEventListener('click', function () { setCaptionTab('settings'); });
+            document.querySelector('#CaptionProcessingTab').addEventListener('click', function () { setCaptionTab('processing'); });
+            document.querySelector('#CaptionProcessingRefresh').addEventListener('click', loadCaptionProcessing);
 
             document.querySelector('#AutoGenerateCaptionsConfigPage')
                 .addEventListener('pageshow', function() {
@@ -337,6 +502,14 @@
                         document.querySelector('#PromotableModels').value = config.PromotableModels || 'large-v3, large-v3-turbo';
                         Dashboard.hideLoadingMsg();
                     });
+                });
+
+            document.querySelector('#AutoGenerateCaptionsConfigPage')
+                .addEventListener('pagehide', function() {
+                    if (AutoGenerateCaptionsConfig.processingTimer) {
+                        clearInterval(AutoGenerateCaptionsConfig.processingTimer);
+                        AutoGenerateCaptionsConfig.processingTimer = null;
+                    }
                 });
 
             document.querySelector('#AutoGenerateCaptionsConfigForm')

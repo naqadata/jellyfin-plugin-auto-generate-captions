@@ -134,6 +134,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.1.zip",
         "checksum": "8bcdf66dc11732399ec1cc64452f1ad7",
         "timestamp": "2026-07-13T21:53:27Z"
+      },
+      {
+        "version": "0.4.2.0",
+        "changelog": "Add caption processing administration view",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.2.zip",
+        "checksum": "444a15a3cb1374e217cd55362804bf41",
+        "timestamp": "2026-07-14T02:52:59Z"
       }
     ]
   }

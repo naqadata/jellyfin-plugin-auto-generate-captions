@@ -45,6 +45,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
     /// <param name="diarize">Whether to perform speaker diarization.</param>
     /// <param name="sliceSeconds">Background transcription slice size, or zero for one pass.</param>
     /// <param name="progress">Optional callback receiving worker progress from zero through one.</param>
+    /// <param name="jobUpdate">Optional callback receiving the worker job id, state, and progress.</param>
     /// <param name="diarizationDiagnosticsPath">Optional durable path for raw diarization turns.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><c>true</c> when remote transcription completed; <c>false</c> when remote is unavailable before a job starts.</returns>
@@ -60,6 +61,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         bool diarize,
         int sliceSeconds,
         Action<double>? progress,
+        Action<string, string, double>? jobUpdate,
         string? diarizationDiagnosticsPath,
         CancellationToken cancellationToken)
     {
@@ -88,7 +90,9 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             return false;
         }
 
-        RemoteJobResponse completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, progress, cancellationToken).ConfigureAwait(false);
+        jobUpdate?.Invoke(job.JobId, job.State, Math.Clamp(job.Progress, 0.0, 1.0));
+
+        RemoteJobResponse completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, progress, jobUpdate, cancellationToken).ConfigureAwait(false);
         RemoteTranscriptResult result = await GetResultAsync(baseUri, config, sessionId, completedJob.JobId, cancellationToken).ConfigureAwait(false);
         WriteVtt(vttPath, result.Segments, offsetSeconds);
         if (!string.IsNullOrWhiteSpace(diarizationDiagnosticsPath) && result.DiarizationTurns is not null)
@@ -267,6 +271,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         Guid sessionId,
         string jobId,
         Action<double>? progress,
+        Action<string, string, double>? jobUpdate,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -281,6 +286,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             RemoteJobResponse job = await response.Content.ReadFromJsonAsync<RemoteJobResponse>(JsonOptions, timeout.Token).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Remote caption worker returned an empty job response.");
             progress?.Invoke(Math.Clamp(job.Progress, 0.0, 1.0));
+            jobUpdate?.Invoke(job.JobId, job.State, Math.Clamp(job.Progress, 0.0, 1.0));
 
             if (string.Equals(job.State, "succeeded", StringComparison.OrdinalIgnoreCase))
             {

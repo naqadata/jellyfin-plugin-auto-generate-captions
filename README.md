@@ -20,7 +20,8 @@ Stock Jellyfin clients do not currently know how to start these caption sessions
 
 The current implementation provides:
 
-- Plugin configuration page.
+- Plugin administration page with separate Settings and Processing tabs.
+- Read-only active/recent processing view with plugin phase, worker queue state, progress, and failure details.
 - Capability endpoint so clients can gate optional generated-caption controls.
 - Session start/status/stop endpoints.
 - A live `.vtt` endpoint that returns valid WebVTT.
@@ -117,6 +118,14 @@ Check server-advertised optional capabilities:
 ```http
 GET /AutoGenerateCaptions/Capabilities
 ```
+
+List active and recent work for an elevated administrator:
+
+```http
+GET /AutoGenerateCaptions/Admin/Jobs?limit=50
+```
+
+The Processing tab polls this endpoint every three seconds. Its recent history is intentionally in-memory and resets when Jellyfin restarts.
 
 Clear generated-caption cache for an item:
 
