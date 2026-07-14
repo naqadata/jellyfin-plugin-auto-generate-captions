@@ -410,7 +410,9 @@ public class AutoGenerateCaptionService
             cues = state.Cues.OrderBy(i => i.StartTicks).ToList();
         }
 
-        if (cues.Count == 0 && IsActiveGenerationStatus(state.Status))
+        if (cues.Count == 0
+            && IsActiveGenerationStatus(state.Status)
+            && state.Mode != CaptionGenerationModes.Full)
         {
             long placeholderStartTicks = state.LastClientPositionTicks > 0
                 ? state.LastClientPositionTicks
@@ -421,9 +423,7 @@ public class AutoGenerateCaptionService
             builder.Append(TicksToTimestamp(placeholderStartTicks));
             builder.Append(" --> ");
             builder.AppendLine(TicksToTimestamp(placeholderEndTicks));
-            builder.AppendLine(state.Mode == CaptionGenerationModes.Full
-                ? string.Create(CultureInfo.InvariantCulture, $"*** Full speaker-labeled subtitles are processing ({state.ProgressPercent}% complete) ***")
-                : "*** Generator spinning up - subtitles will start soon ***");
+            builder.AppendLine("<AI Generation Buffering...>");
             builder.AppendLine();
         }
 
