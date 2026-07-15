@@ -211,6 +211,7 @@ public class AutoGenerateCaptionService
             Mode = CaptionGenerationModes.Full,
             IsDiarized = config.EnableBackgroundDiarization,
             OverwriteExistingSubtitle = request.OverwriteExistingSubtitle,
+            DeferCaptionPolish = request.DeferCaptionPolish,
             Message = "Background caption prefetch queued.",
             ProcessingPhase = "queued"
         };
@@ -916,6 +917,30 @@ public class AutoGenerateCaptionService
             AddChunkResult(state, cues, 0, durationTicks);
             WriteCacheMetadata(state, persistentCacheDirectory);
             WriteCombinedCacheFromState(state, config, persistentCacheDirectory, config.RemoteWorkerModel);
+
+            if (state.DeferCaptionPolish && state.EnableOpenAiPolish && IsCaptionPolishConfigured(config))
+            {
+                List<CaptionCue> rawCues;
+                lock (state.SyncRoot)
+                {
+                    rawCues = state.Cues.OrderBy(i => i.StartTicks).ThenBy(i => i.EndTicks).ToList();
+                }
+
+                WriteChunkCache(state, persistentCacheDirectory, 0, 0, durationTicks, rawCues);
+                await PromoteEnhancedSubtitleAsync(state, persistentCacheDirectory, config.RemoteWorkerModel).ConfigureAwait(false);
+                state.GeneratedThroughTicks = durationTicks;
+                state.ProgressPercent = 100;
+                state.ProcessingPhase = "awaiting-polish";
+                state.Status = CaptionSessionStatuses.Complete;
+                state.CompletedAt = DateTimeOffset.UtcNow;
+                state.Message = "Raw diarized captions are ready; polish is waiting for the transcription queue to drain.";
+                _logger.LogInformation(
+                    "Auto-caption background prefetch promoted raw captions for deferred polish: session={SessionId}; item={ItemName}; cues={CueCount}",
+                    state.SessionId,
+                    state.ItemName,
+                    rawCues.Count);
+                return;
+            }
 
             if (state.EnableOpenAiPolish && IsCaptionPolishConfigured(config))
             {
@@ -3921,6 +3946,8 @@ public class AutoGenerateCaptionService
         public bool IsDiarized { get; init; }
 
         public bool OverwriteExistingSubtitle { get; init; }
+
+        public bool DeferCaptionPolish { get; init; }
 
         public bool EnhancedReady { get; set; }
 

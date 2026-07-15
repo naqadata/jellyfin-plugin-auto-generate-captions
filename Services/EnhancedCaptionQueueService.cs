@@ -45,8 +45,8 @@ public class EnhancedCaptionQueueService : BackgroundService
         lock (_syncRoot)
         {
             return _jobs
-                .Where(i => i.Status is "running" or "polishing" or "queued")
-                .OrderBy(i => i.Status == "running" ? 0 : i.Status == "polishing" ? 1 : 2)
+                .Where(i => i.Status is "running" or "polishing" or "pending-polish" or "queued")
+                .OrderBy(i => i.Status == "running" ? 0 : i.Status == "polishing" ? 1 : i.Status == "pending-polish" ? 2 : 3)
                 .ThenBy(i => i.CreatedAt)
                 .Concat(_jobs
                     .Where(i => i.Status is not "running" and not "polishing" and not "queued")
@@ -81,7 +81,7 @@ public class EnhancedCaptionQueueService : BackgroundService
         {
             foreach (Video item in videos)
             {
-                if (_jobs.Any(i => i.ItemId == item.Id && i.Status is "queued" or "running" or "polishing"))
+                if (_jobs.Any(i => i.ItemId == item.Id && i.Status is "queued" or "running" or "polishing" or "pending-polish"))
                 {
                     continue;
                 }
@@ -144,7 +144,7 @@ public class EnhancedCaptionQueueService : BackgroundService
         lock (_syncRoot)
         {
             CaptionQueueJobDto? job = _jobs.FirstOrDefault(i => i.Id == jobId);
-            if (job is null || job.Status is "queued" or "running" or "polishing")
+            if (job is null || job.Status is "queued" or "running" or "polishing" or "pending-polish")
             {
                 return false;
             }
@@ -185,6 +185,15 @@ public class EnhancedCaptionQueueService : BackgroundService
                 return true;
             }
 
+            if (job.Status == "pending-polish")
+            {
+                job.Status = "stopped";
+                job.Message = "Deferred polish cancelled from the server queue.";
+                job.CompletedAt = DateTimeOffset.UtcNow;
+                SaveLocked();
+                return true;
+            }
+
             if (job.Status is not "running" and not "polishing")
             {
                 return false;
@@ -214,6 +223,7 @@ public class EnhancedCaptionQueueService : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             CaptionQueueJobDto? next;
+            CaptionQueueJobDto? nextPolish = null;
             lock (_syncRoot)
             {
                 next = _jobs.FirstOrDefault(i => i.Status == "queued");
@@ -224,15 +234,32 @@ public class EnhancedCaptionQueueService : BackgroundService
                     next.Message = "Starting server-side Enhanced generation.";
                     SaveLocked();
                 }
+                else
+                {
+                    nextPolish = _jobs.FirstOrDefault(i => i.Status == "pending-polish");
+                    if (nextPolish is not null)
+                    {
+                        nextPolish.Status = "polishing";
+                        nextPolish.StartedAt ??= DateTimeOffset.UtcNow;
+                        nextPolish.Message = "Starting deferred local caption polish after transcription queue drained.";
+                        SaveLocked();
+                    }
+                }
             }
 
-            if (next is null)
+            if (next is not null)
             {
-                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false);
+                await ProcessAsync(next, stoppingToken).ConfigureAwait(false);
                 continue;
             }
 
-            await ProcessAsync(next, stoppingToken).ConfigureAwait(false);
+            if (nextPolish is not null)
+            {
+                await ProcessPolishAsync(nextPolish, stoppingToken).ConfigureAwait(false);
+                continue;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false);
         }
     }
 
@@ -273,7 +300,8 @@ public class EnhancedCaptionQueueService : BackgroundService
 
             CaptionSessionDto session = _captionService.StartPrefetch(video, new PrefetchCaptionRequest
             {
-                OverwriteExistingSubtitle = job.OverwriteExistingSubtitle
+                OverwriteExistingSubtitle = job.OverwriteExistingSubtitle,
+                DeferCaptionPolish = true
             });
             lock (_syncRoot)
             {
@@ -299,6 +327,12 @@ public class EnhancedCaptionQueueService : BackgroundService
 
                 if (status.Status is CaptionSessionStatuses.Complete or CaptionSessionStatuses.Cached)
                 {
+                    if (string.Equals(status.ProcessingPhase, "awaiting-polish", StringComparison.OrdinalIgnoreCase))
+                    {
+                        MarkPendingPolish(job.Id, status);
+                        return;
+                    }
+
                     Complete(job.Id, "complete", status.Message ?? "Enhanced subtitle written beside media.");
                     return;
                 }
@@ -306,13 +340,6 @@ public class EnhancedCaptionQueueService : BackgroundService
                 if (status.Status is CaptionSessionStatuses.Failed or CaptionSessionStatuses.Stopped or CaptionSessionStatuses.Skipped)
                 {
                     Complete(job.Id, status.Status, status.Message ?? "Enhanced caption generation did not complete.");
-                    return;
-                }
-
-                if (string.Equals(status.ProcessingPhase, "polishing", StringComparison.OrdinalIgnoreCase))
-                {
-                    MarkPolishing(job.Id, status);
-                    _ = MonitorPolishAsync(job.Id, session.SessionId, stoppingToken);
                     return;
                 }
 
@@ -338,6 +365,42 @@ public class EnhancedCaptionQueueService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Server-side Enhanced caption job {JobId} failed for {ItemName}", job.Id, job.ItemName);
+            Complete(job.Id, "failed", ex.Message);
+        }
+    }
+
+    private async Task ProcessPolishAsync(CaptionQueueJobDto job, CancellationToken stoppingToken)
+    {
+        try
+        {
+            if (_libraryManager.GetItemById(job.ItemId) is not Video video)
+            {
+                Complete(job.Id, "failed", "The queued library item is no longer a video item.");
+                return;
+            }
+
+            CaptionSessionDto session = _captionService.StartCachedPolish(video);
+            lock (_syncRoot)
+            {
+                CaptionQueueJobDto? current = _jobs.FirstOrDefault(i => i.Id == job.Id);
+                if (current is not null)
+                {
+                    current.SessionId = session.SessionId;
+                    current.ProcessingPhase = "polishing";
+                    current.Message = "Polishing cached captions locally.";
+                    SaveLocked();
+                }
+            }
+
+            await MonitorPolishAsync(job.Id, session.SessionId, stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            MarkPendingPolish(job.Id, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Deferred caption polish job {JobId} failed for {ItemName}", job.Id, job.ItemName);
             Complete(job.Id, "failed", ex.Message);
         }
     }
@@ -373,7 +436,7 @@ public class EnhancedCaptionQueueService : BackgroundService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            Requeue(jobId, "Requeued because Jellyfin is restarting during caption polish.");
+            MarkPendingPolish(jobId, null);
         }
         catch (Exception ex)
         {
@@ -396,6 +459,25 @@ public class EnhancedCaptionQueueService : BackgroundService
             job.ProgressPercent = status.ProgressPercent;
             job.ProcessingPhase = "polishing";
             job.Message = status.Message ?? "Polishing captions.";
+            SaveLocked();
+        }
+    }
+
+    private void MarkPendingPolish(Guid jobId, CaptionSessionStatusDto? status)
+    {
+        lock (_syncRoot)
+        {
+            CaptionQueueJobDto? job = _jobs.FirstOrDefault(i => i.Id == jobId);
+            if (job is null || job.Status == "stopped")
+            {
+                return;
+            }
+
+            job.Status = "pending-polish";
+            job.SessionId = null;
+            job.ProgressPercent = status?.ProgressPercent ?? 100;
+            job.ProcessingPhase = "awaiting-polish";
+            job.Message = status?.Message ?? "Raw diarized captions are ready; waiting for the transcription queue to drain before polishing.";
             SaveLocked();
         }
     }
@@ -459,12 +541,18 @@ public class EnhancedCaptionQueueService : BackgroundService
                 job.Status = "skipped";
                 job.ProcessingPhase = "skipped";
             }
-            foreach (CaptionQueueJobDto job in _jobs.Where(i => i.Status is "running" or "polishing"))
+            foreach (CaptionQueueJobDto job in _jobs.Where(i => i.Status == "running"))
             {
                 job.Status = "queued";
                 job.SessionId = null;
                 job.StartedAt = null;
                 job.Message = "Requeued after Jellyfin restarted.";
+            }
+            foreach (CaptionQueueJobDto job in _jobs.Where(i => i.Status == "polishing"))
+            {
+                job.Status = "pending-polish";
+                job.SessionId = null;
+                job.Message = "Deferred polish is waiting to resume after Jellyfin restarted.";
             }
 
             SaveLocked();

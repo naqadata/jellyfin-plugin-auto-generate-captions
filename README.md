@@ -193,7 +193,7 @@ Relevant cue-shaping settings:
 - `Caption polish provider`: choose `OpenAI`, `Local`, or `Disabled`. Existing installations remain on OpenAI until changed.
 - `Local polish URL`: an OpenAI-compatible `/v1/chat/completions` endpoint, such as Ollama. The plugin requests strict JSON-schema output and validates it before replacing any cue.
 - `Local Live polish model`: a compact model intended to share GPU memory with Whisper.
-- `Local Full polish model`: a larger model used by server-side Enhanced jobs only after other plugin transcription has become idle.
+- `Local Full polish model`: a larger model used by server-side Enhanced jobs only after the durable transcription queue drains. Raw diarized VTT sidecars are promoted first, then one queued polish job replaces each sidecar in turn.
 - Local Full polish uses compact 32-cue batches with only nearby read-only context; OpenAI retains its larger batch strategy.
 - `OpenAI polish lookahead seconds`: minimum generated-caption buffer ahead of playback before polishing starts.
 - `OpenAI polish window seconds`: maximum caption span sent to OpenAI in one pass.

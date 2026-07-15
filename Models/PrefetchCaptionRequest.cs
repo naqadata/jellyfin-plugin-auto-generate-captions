@@ -30,4 +30,9 @@ public class PrefetchCaptionRequest
     /// Gets or sets whether a server-side Enhanced job may replace an existing sidecar subtitle.
     /// </summary>
     public bool OverwriteExistingSubtitle { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether polishing should be deferred until the durable queue has drained transcription work.
+    /// </summary>
+    public bool DeferCaptionPolish { get; set; }
 }
