@@ -246,6 +246,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.15.zip",
         "checksum": "ce3a214b5a05518f928e3fc9b4e32763",
         "timestamp": "2026-07-15T03:50:11Z"
+      },
+      {
+        "version": "0.4.16.0",
+        "changelog": "Add live caption polish eligibility diagnostics",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.16.zip",
+        "checksum": "555a595a477ad91c27e963e79a9222fb",
+        "timestamp": "2026-07-15T18:23:31Z"
       }
     ]
   }

@@ -2167,6 +2167,21 @@ public class AutoGenerateCaptionService
         string? persistentCacheDirectory,
         string model)
     {
+        if (config.EnableVerboseWorkerLogging)
+        {
+            _logger.LogInformation(
+                "Auto-caption live polish eligibility for session {SessionId}: enabled={Enabled}; configured={Configured}; provider={Provider}; model={Model}; promotable={Promotable}; generatedThroughTicks={GeneratedThroughTicks}; clientPositionTicks={ClientPositionTicks}; lastPolishedThroughTicks={LastPolishedThroughTicks}",
+                state.SessionId,
+                state.EnableOpenAiPolish,
+                IsCaptionPolishConfigured(config),
+                GetCaptionPolishProvider(config),
+                model,
+                IsPromotableModel(config, model),
+                state.GeneratedThroughTicks,
+                state.LastClientPositionTicks,
+                state.LastOpenAiPolishedThroughTicks);
+        }
+
         if (!state.EnableOpenAiPolish || !IsCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
         {
             return;
@@ -2182,6 +2197,14 @@ public class AutoGenerateCaptionService
         long generatedThroughTicks = state.GeneratedThroughTicks;
         if (generatedThroughTicks - clientPositionTicks < requiredLookaheadTicks)
         {
+            if (config.EnableVerboseWorkerLogging)
+            {
+                _logger.LogInformation(
+                    "Auto-caption live polish deferred for session {SessionId}: generatedAheadTicks={GeneratedAheadTicks}; requiredLookaheadTicks={RequiredLookaheadTicks}",
+                    state.SessionId,
+                    generatedThroughTicks - clientPositionTicks,
+                    requiredLookaheadTicks);
+            }
             return;
         }
 
@@ -2212,6 +2235,13 @@ public class AutoGenerateCaptionService
                 .ToList();
             if (cues.Count < 2)
             {
+                if (config.EnableVerboseWorkerLogging)
+                {
+                    _logger.LogInformation(
+                        "Auto-caption live polish deferred for session {SessionId}: eligibleCueCount={CueCount}",
+                        state.SessionId,
+                        cues.Count);
+                }
                 return;
             }
 
