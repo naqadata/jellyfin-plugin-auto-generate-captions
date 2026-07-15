@@ -121,6 +121,37 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Asks an idle remote worker to release its cached Whisper weights for a local GPU task.
+    /// </summary>
+    public async Task ReleaseModelCacheIfIdleAsync(PluginConfiguration config, Guid sessionId, CancellationToken cancellationToken)
+    {
+        if (!TryGetBaseUri(config, out Uri? baseUri) || baseUri is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(config.RemoteWorkerHealthTimeoutSeconds, 1, 30)));
+            using HttpRequestMessage request = CreateRequest(HttpMethod.Post, new Uri(baseUri, "v1/model/release"), config);
+            using HttpResponseMessage response = await _httpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("Auto-caption remote worker released cached Whisper weights for local polish: session={SessionId}; worker={WorkerUrl}", sessionId, baseUri);
+            }
+            else
+            {
+                _logger.LogInformation("Auto-caption remote worker kept cached Whisper weights for local polish: session={SessionId}; worker={WorkerUrl}; statusCode={StatusCode}", sessionId, baseUri, response.StatusCode);
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Auto-caption remote worker model release failed before local polish: session={SessionId}; worker={WorkerUrl}", sessionId, baseUri);
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

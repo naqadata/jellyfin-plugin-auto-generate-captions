@@ -16,6 +16,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Persistence;
+using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -27,8 +28,10 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 24;
-    private const string EnhancedSubtitleTitle = "AI Generated (Enhanced)";
+    private const int GenerationPipelineVersion = 25;
+    private const int FullPolishBatchCueCount = 320;
+    private const int FullPolishContextSeconds = 60;
+    private const string EnhancedSubtitleTitle = "AI Generated";
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
@@ -37,28 +40,36 @@ public class AutoGenerateCaptionService
     private readonly ConcurrentDictionary<string, Guid> _prefetchByCacheKey = new(StringComparer.Ordinal);
     private readonly IApplicationPaths _applicationPaths;
     private readonly IMediaStreamRepository _mediaStreamRepository;
+    private readonly IProviderManager _providerManager;
+    private readonly IDirectoryService _directoryService;
     private readonly ResidentWhisperWorker _residentWhisperWorker;
     private readonly RemoteCaptionWorkerClient _remoteCaptionWorkerClient;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
-    private readonly HttpClient _openAiHttpClient = new();
+    private readonly HttpClient _captionPolishHttpClient = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoGenerateCaptionService"/> class.
     /// </summary>
     /// <param name="applicationPaths">Application paths.</param>
     /// <param name="mediaStreamRepository">Jellyfin media stream repository.</param>
+    /// <param name="providerManager">Jellyfin metadata provider manager.</param>
+    /// <param name="directoryService">Jellyfin directory service.</param>
     /// <param name="residentWhisperWorker">Resident Whisper worker.</param>
     /// <param name="remoteCaptionWorkerClient">Remote caption worker client.</param>
     /// <param name="logger">Logger.</param>
     public AutoGenerateCaptionService(
         IApplicationPaths applicationPaths,
         IMediaStreamRepository mediaStreamRepository,
+        IProviderManager providerManager,
+        IDirectoryService directoryService,
         ResidentWhisperWorker residentWhisperWorker,
         RemoteCaptionWorkerClient remoteCaptionWorkerClient,
         ILogger<AutoGenerateCaptionService> logger)
     {
         _applicationPaths = applicationPaths;
         _mediaStreamRepository = mediaStreamRepository;
+        _providerManager = providerManager;
+        _directoryService = directoryService;
         _residentWhisperWorker = residentWhisperWorker;
         _remoteCaptionWorkerClient = remoteCaptionWorkerClient;
         _logger = logger;
@@ -125,8 +136,8 @@ public class AutoGenerateCaptionService
             config.ChunkSeconds,
             config.ChunkOverlapSeconds,
             config.LookaheadSeconds,
-            IsOpenAiCaptionPolishConfigured(config),
-            GetOpenAiCaptionPolishModel(config),
+            IsCaptionPolishConfigured(config),
+            GetCaptionPolishProvider(config),
             config.OpenAiPolishLookaheadSeconds,
             config.OpenAiPolishWindowSeconds,
             config.OpenAiPolishGuardBandSeconds,
@@ -195,6 +206,7 @@ public class AutoGenerateCaptionService
             IsPrefetch = true,
             Mode = CaptionGenerationModes.Full,
             IsDiarized = config.EnableBackgroundDiarization,
+            OverwriteExistingSubtitle = request.OverwriteExistingSubtitle,
             Message = "Background caption prefetch queued.",
             ProcessingPhase = "queued"
         };
@@ -207,6 +219,24 @@ public class AutoGenerateCaptionService
             && IsActiveGenerationStatus(existing.Status))
         {
             return ToDto(existing);
+        }
+
+        string enhancedPath = GetEnhancedSubtitlePath(state);
+        if (!request.OverwriteExistingSubtitle && File.Exists(enhancedPath))
+        {
+            state.Status = CaptionSessionStatuses.Skipped;
+            state.ProcessingPhase = "skipped";
+            state.Message = string.Create(
+                CultureInfo.InvariantCulture,
+                $"Skipped because an Enhanced subtitle sidecar already exists: {enhancedPath}");
+            state.CompletedAt = DateTimeOffset.UtcNow;
+            _sessions[state.SessionId] = state;
+            _logger.LogInformation(
+                "Skipped auto-caption background prefetch {SessionId} for {ItemName}: existing sidecar={SubtitlePath}",
+                state.SessionId,
+                state.ItemName,
+                enhancedPath);
+            return ToDto(state);
         }
 
         _sessions[state.SessionId] = state;
@@ -251,8 +281,10 @@ public class AutoGenerateCaptionService
         {
             GeneratedAt = DateTimeOffset.UtcNow,
             ActiveJobs = states.Count(state => IsActiveGenerationStatus(state.Status)),
-            QueuedWorkerJobs = states.Count(state => string.Equals(state.WorkerState, "queued", StringComparison.OrdinalIgnoreCase)),
-            RunningWorkerJobs = states.Count(state => string.Equals(state.WorkerState, "running", StringComparison.OrdinalIgnoreCase)),
+            QueuedWorkerJobs = states.Count(state => IsActiveGenerationStatus(state.Status)
+                && string.Equals(state.WorkerState, "queued", StringComparison.OrdinalIgnoreCase)),
+            RunningWorkerJobs = states.Count(state => IsActiveGenerationStatus(state.Status)
+                && string.Equals(state.WorkerState, "running", StringComparison.OrdinalIgnoreCase)),
             Jobs = jobs
         };
     }
@@ -289,6 +321,28 @@ public class AutoGenerateCaptionService
     }
 
     /// <summary>
+    /// Stops a server-owned background session when its durable queue entry is cancelled.
+    /// </summary>
+    /// <param name="sessionId">Background caption session id.</param>
+    /// <returns>Stopped session status, or null when not found.</returns>
+    public CaptionSessionStatusDto? StopBackgroundSession(Guid sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out CaptionSessionState? state))
+        {
+            return null;
+        }
+
+        state.Status = CaptionSessionStatuses.Stopped;
+        state.ProcessingPhase = "stopped";
+        state.Message = "Background caption job cancelled from the server queue.";
+        state.StoppedAt = DateTimeOffset.UtcNow;
+        state.CompletedAt = state.StoppedAt;
+        state.Cancellation.Cancel();
+        _logger.LogInformation("Stopped server-owned background auto-caption session {SessionId}", sessionId);
+        return ToStatusDto(state);
+    }
+
+    /// <summary>
     /// Gets client-facing plugin capabilities.
     /// </summary>
     /// <returns>Capability flags.</returns>
@@ -298,7 +352,10 @@ public class AutoGenerateCaptionService
         return new
         {
             OpenAiCaptionPolishAvailable = IsOpenAiCaptionPolishConfigured(config),
-            BackgroundPrefetchAvailable = config.EnableBackgroundPrefetch
+            CaptionPolishAvailable = IsCaptionPolishConfigured(config),
+            CaptionPolishProvider = GetCaptionPolishProvider(config),
+            BackgroundPrefetchAvailable = false,
+            ServerEnhancedQueueAvailable = config.EnableBackgroundPrefetch
                 && config.EnableRemoteWorker
                 && IsPromotableModel(config, config.RemoteWorkerModel),
             BackgroundDiarizationEnabled = config.EnableBackgroundDiarization
@@ -716,7 +773,9 @@ public class AutoGenerateCaptionService
             long durationTicks = state.DurationTicks.Value;
             CacheFileRange? completeRange = GetCachedChunkRanges(persistentCacheDirectory)
                 .FirstOrDefault(i => i.StartTicks == 0 && i.EndTicks >= durationTicks);
-            if (completeRange is not null && File.Exists(GetCombinedVttPath(persistentCacheDirectory)))
+            if (!state.OverwriteExistingSubtitle
+                && completeRange is not null
+                && File.Exists(GetCombinedVttPath(persistentCacheDirectory)))
             {
                 TryHydrateFromCombinedCache(state, config, persistentCacheDirectory);
                 await PromoteEnhancedSubtitleAsync(state, persistentCacheDirectory, config.RemoteWorkerModel).ConfigureAwait(false);
@@ -741,7 +800,7 @@ public class AutoGenerateCaptionService
                 audioPath).ConfigureAwait(false);
 
             state.ProcessingPhase = "transcribing";
-            state.Message = "Background transcription and diarization queued on the remote worker.";
+            state.Message = "Submitting background transcription and diarization to the remote worker.";
             bool completed = await _remoteCaptionWorkerClient.TryTranscribeAsync(
                 config,
                 state.SessionId,
@@ -754,10 +813,15 @@ public class AutoGenerateCaptionService
                 diarize: config.EnableBackgroundDiarization,
                 sliceSeconds: Math.Clamp(config.BackgroundSliceSeconds, 60, 1800),
                 progress: progress => state.ProgressPercent = Math.Clamp(5 + (int)Math.Round(progress * 90), 5, 95),
-                jobUpdate: (jobId, workerState, _) =>
+                jobUpdate: (jobId, workerState, workerProgress) =>
                 {
                     state.WorkerJobId = jobId;
                     state.WorkerState = workerState;
+                    state.Message = workerProgress > 0 || string.Equals(workerState, "running", StringComparison.OrdinalIgnoreCase)
+                        ? "Background transcription and diarization running on the remote CUDA worker."
+                        : string.Equals(workerState, "queued", StringComparison.OrdinalIgnoreCase)
+                            ? "Background transcription and diarization queued on the remote worker."
+                            : "Background transcription and diarization processing on the remote worker.";
                 },
                 diarizationDiagnosticsPath: Path.Combine(persistentCacheDirectory, "diarization-turns.json"),
                 state.Cancellation.Token).ConfigureAwait(false);
@@ -787,10 +851,15 @@ public class AutoGenerateCaptionService
             WriteCacheMetadata(state, persistentCacheDirectory);
             WriteCombinedCacheFromState(state, config, persistentCacheDirectory, config.RemoteWorkerModel);
 
-            if (state.EnableOpenAiPolish && IsOpenAiCaptionPolishConfigured(config))
+            if (state.EnableOpenAiPolish && IsCaptionPolishConfigured(config))
             {
                 state.ProcessingPhase = "polishing";
-                state.Message = "Polishing speaker-safe caption groups with OpenAI.";
+                state.Message = string.Create(CultureInfo.InvariantCulture, $"Polishing speaker-safe caption groups with {GetCaptionPolishProvider(config)}.");
+                if (IsLocalCaptionPolish(config))
+                {
+                    await WaitForLocalPolishGpuAsync(state, config).ConfigureAwait(false);
+                    await _remoteCaptionWorkerClient.ReleaseModelCacheIfIdleAsync(config, state.SessionId, state.Cancellation.Token).ConfigureAwait(false);
+                }
                 await PolishFullCaptionsWithOpenAiAsync(
                     state,
                     config,
@@ -835,6 +904,14 @@ public class AutoGenerateCaptionService
             state.Message = "Background caption prefetch cancelled.";
             state.StoppedAt = DateTimeOffset.UtcNow;
             state.CompletedAt = state.StoppedAt;
+        }
+        catch (IOException ex) when (ex.Message.StartsWith("Refusing to replace existing subtitle sidecar", StringComparison.Ordinal))
+        {
+            state.Status = CaptionSessionStatuses.Skipped;
+            state.ProcessingPhase = "skipped";
+            state.Message = ex.Message;
+            state.CompletedAt = DateTimeOffset.UtcNow;
+            _logger.LogInformation("Skipped background caption prefetch for session {SessionId}: {Reason}", state.SessionId, ex.Message);
         }
         catch (Exception ex)
         {
@@ -1463,7 +1540,7 @@ public class AutoGenerateCaptionService
                 .ToList();
         }
 
-        List<List<SpeakerPolishGroup>> batches = BuildSpeakerPolishBatches(sourceCues, 80);
+        List<List<SpeakerPolishGroup>> batches = BuildSpeakerPolishBatches(sourceCues, FullPolishBatchCueCount);
         int appliedGroups = 0;
         int rejectedGroups = 0;
         int appliedCues = 0;
@@ -1575,7 +1652,7 @@ public class AutoGenerateCaptionService
         int maxCueWords = Math.Clamp(Math.Max(config.MaxCueWords, 12), 3, 40);
         long batchStartTicks = groups.Min(i => i.StartTicks);
         long batchEndTicks = groups.Max(i => i.EndTicks);
-        long contextWindowTicks = TimeSpan.FromSeconds(Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800)).Ticks;
+        long contextWindowTicks = TimeSpan.FromSeconds(FullPolishContextSeconds).Ticks;
         List<CaptionCue> contextBefore = allCues
             .Where(i => i.EndTicks <= batchStartTicks && i.EndTicks >= batchStartTicks - contextWindowTicks)
             .OrderBy(i => i.StartTicks)
@@ -1584,6 +1661,19 @@ public class AutoGenerateCaptionService
             .Where(i => i.StartTicks >= batchEndTicks && i.StartTicks <= batchEndTicks + contextWindowTicks)
             .OrderBy(i => i.StartTicks)
             .ToList();
+        string inputJson = JsonSerializer.Serialize(new
+        {
+            context_before = contextBefore.Select(ToOpenAiCue),
+            editable_groups = groups.Select(group => new
+            {
+                group_id = group.GroupId,
+                speaker = group.Speaker,
+                window_start_ms = TicksToMilliseconds(group.StartTicks),
+                window_end_ms = TicksToMilliseconds(group.EndTicks),
+                cues = group.Cues.Select(ToOpenAiCue)
+            }),
+            context_after = contextAfter.Select(ToOpenAiCue)
+        }, JsonOptions);
         var request = new
         {
             model = GetOpenAiCaptionPolishModel(config),
@@ -1609,19 +1699,7 @@ public class AutoGenerateCaptionService
                         new
                         {
                             type = "input_text",
-                            text = JsonSerializer.Serialize(new
-                            {
-                                context_before = contextBefore.Select(ToOpenAiCue),
-                                editable_groups = groups.Select(group => new
-                                {
-                                    group_id = group.GroupId,
-                                    speaker = group.Speaker,
-                                    window_start_ms = TicksToMilliseconds(group.StartTicks),
-                                    window_end_ms = TicksToMilliseconds(group.EndTicks),
-                                    cues = group.Cues.Select(ToOpenAiCue)
-                                }),
-                                context_after = contextAfter.Select(ToOpenAiCue)
-                            }, JsonOptions)
+                            text = inputJson
                         }
                     }
                 }
@@ -1680,13 +1758,32 @@ public class AutoGenerateCaptionService
             store = false
         };
 
+        if (IsLocalCaptionPolish(config))
+        {
+            string localOutputText = await SendLocalCaptionPolishAsync(
+                config,
+                GetLocalCaptionPolishModel(config, isFull: true),
+                BuildOpenAiSpeakerGroupPolishPrompt(maxCueWords),
+                inputJson,
+                request.text.format.schema,
+                "speaker_group_caption_polish",
+                cancellationToken).ConfigureAwait(false);
+            OpenAiSpeakerGroupPolishResponse? localParsed = JsonSerializer.Deserialize<OpenAiSpeakerGroupPolishResponse>(localOutputText, JsonOptions);
+            if (localParsed?.Groups is null)
+            {
+                throw new InvalidOperationException("Local speaker-group caption polish returned no groups.");
+            }
+
+            return localParsed;
+        }
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/responses");
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.OpenAiApiKey.Trim());
         httpRequest.Content = JsonContent.Create(request, options: JsonOptions);
         Stopwatch requestStopwatch = Stopwatch.StartNew();
-        using HttpResponseMessage response = await _openAiHttpClient.SendAsync(httpRequest, timeout.Token).ConfigureAwait(false);
+        using HttpResponseMessage response = await _captionPolishHttpClient.SendAsync(httpRequest, timeout.Token).ConfigureAwait(false);
         string responseText = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
         requestStopwatch.Stop();
         if (!response.IsSuccessStatusCode)
@@ -1704,7 +1801,7 @@ public class AutoGenerateCaptionService
         }
 
         _logger.LogInformation(
-            "Auto-caption Full OpenAI polish response for session {SessionId}: statusCode={StatusCode}; elapsedMs={ElapsedMs}; inputGroups={InputGroupCount}; outputGroups={OutputGroupCount}; inputCues={InputCueCount}; outputCues={OutputCueCount}; responseBytes={ResponseBytes}",
+            "Auto-caption Full OpenAI polish response for session {SessionId}: statusCode={StatusCode}; elapsedMs={ElapsedMs}; inputGroups={InputGroupCount}; outputGroups={OutputGroupCount}; inputCues={InputCueCount}; outputCues={OutputCueCount}; contextBeforeCues={ContextBeforeCues}; contextAfterCues={ContextAfterCues}; inputJsonBytes={InputJsonBytes}; responseBytes={ResponseBytes}",
             sessionId,
             response.StatusCode,
             requestStopwatch.ElapsedMilliseconds,
@@ -1712,6 +1809,9 @@ public class AutoGenerateCaptionService
             parsed.Groups.Count,
             groups.Sum(i => i.Cues.Count),
             parsed.Groups.Sum(i => i.Cues.Count),
+            contextBefore.Count,
+            contextAfter.Count,
+            Encoding.UTF8.GetByteCount(inputJson),
             responseText.Length);
         return parsed;
     }
@@ -1868,7 +1968,7 @@ public class AutoGenerateCaptionService
         string? persistentCacheDirectory,
         string model)
     {
-        if (!state.EnableOpenAiPolish || !IsOpenAiCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
+        if (!state.EnableOpenAiPolish || !IsCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
         {
             return;
         }
@@ -2096,6 +2196,33 @@ public class AutoGenerateCaptionService
             store = false
         };
 
+        if (IsLocalCaptionPolish(config))
+        {
+            string localInputJson = JsonSerializer.Serialize(new
+            {
+                window_start_ms = TicksToMilliseconds(windowStartTicks),
+                window_end_ms = TicksToMilliseconds(windowEndTicks),
+                context_before = contextBefore.Select(ToOpenAiCue),
+                editable_cues = cues.Select(ToOpenAiCue),
+                context_after = contextAfter.Select(ToOpenAiCue)
+            }, JsonOptions);
+            string localOutputText = await SendLocalCaptionPolishAsync(
+                config,
+                GetLocalCaptionPolishModel(config, isFull: false),
+                BuildOpenAiCaptionPolishPrompt(maxCueWords),
+                localInputJson,
+                request.text.format.schema,
+                "caption_polish",
+                cancellationToken).ConfigureAwait(false);
+            OpenAiCaptionPolishResponse? localParsed = JsonSerializer.Deserialize<OpenAiCaptionPolishResponse>(localOutputText, JsonOptions);
+            if (localParsed?.Cues is null)
+            {
+                throw new InvalidOperationException("Local caption polish returned no cues.");
+            }
+
+            return ValidatePolishedCues(localParsed.Cues, cues, windowStartTicks, windowEndTicks);
+        }
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/responses");
@@ -2103,7 +2230,7 @@ public class AutoGenerateCaptionService
         httpRequest.Content = JsonContent.Create(request, options: JsonOptions);
 
         Stopwatch requestStopwatch = Stopwatch.StartNew();
-        using HttpResponseMessage response = await _openAiHttpClient.SendAsync(httpRequest, timeout.Token).ConfigureAwait(false);
+        using HttpResponseMessage response = await _captionPolishHttpClient.SendAsync(httpRequest, timeout.Token).ConfigureAwait(false);
         string responseText = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
         requestStopwatch.Stop();
         if (!response.IsSuccessStatusCode)
@@ -2145,9 +2272,36 @@ public class AutoGenerateCaptionService
 
     private static string BuildOpenAiCaptionPolishPrompt(int maxCueWords)
     {
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"Clean up the editable_cues in a future-safe group of auto-generated subtitles. context_before and context_after are read-only context: use them to understand sentence flow, but never return or rewrite them. Preserve every speaker value exactly, including null, and never move words between cues with different speakers. Keep wording faithful. Improve punctuation, capitalization, and sentence flow. You may move words between neighboring editable cues with the same speaker, split editable cues, or merge editable cues with the same speaker when it makes the sentence structure more coherent. Prefer cue boundaries at sentence boundaries, clause boundaries, or natural speech pauses. Do not leave one- or two-word fragments at the beginning or end of a cue when they grammatically belong to a neighboring cue. If a cue begins with an orphaned conjunction, pronoun, article, preposition, or phrase that belongs to the previous sentence, use the read-only context to punctuate it correctly without returning the context cue. Prefer sentence-level cues when timing allows. Hard rule: if a cue would contain more than {maxCueWords} words, split it into two or more consecutive cues with roughly even word counts, preserving phrase boundaries and natural pauses. Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated syllables requires it. Adjust returned cue timestamps within the provided editable time range to match natural cue boundaries; when splitting a long cue, divide its time range proportionally across the new cues. Keep all returned cue timestamps inside the provided time range. Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor, mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns. Return only rewritten editable cues.");
+        return $"""
+            Clean up the editable_cues in a future-safe group of auto-generated subtitles.
+
+            context_before and context_after are read-only context: use them to understand sentence flow,
+            but never return or rewrite them. Preserve every speaker value exactly, including null, and
+            never move words between cues with different speakers. Keep wording faithful.
+
+            Improve punctuation, capitalization, and sentence flow. You may move words between neighboring
+            editable cues with the same speaker, split editable cues, or merge editable cues with the same
+            speaker when it makes the sentence structure more coherent. Prefer cue boundaries at sentence
+            boundaries, clause boundaries, or natural speech pauses. Do not leave one- or two-word fragments
+            at the beginning or end of a cue when they grammatically belong to a neighboring cue. If a cue
+            begins with an orphaned conjunction, pronoun, article, preposition, or phrase that belongs to the
+            previous sentence, use the read-only context to punctuate it correctly without returning the
+            context cue. Prefer sentence-level cues when timing allows.
+
+            Hard rule: if a cue would contain more than {maxCueWords} words, split it into two or more
+            consecutive cues with roughly even word counts, preserving phrase boundaries and natural pauses.
+            Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated
+            syllables requires it. Adjust returned cue timestamps within the provided editable time range to
+            match natural cue boundaries; when splitting a long cue, divide its time range proportionally
+            across the new cues. Keep all returned cue timestamps inside the provided time range.
+
+            Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor,
+            mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore
+            masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics
+            and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns.
+
+            Return only rewritten editable cues.
+            """;
     }
 
     private static string ExtractOpenAiOutputText(string responseText)
@@ -2418,7 +2572,122 @@ public class AutoGenerateCaptionService
 
     private static bool IsOpenAiCaptionPolishConfigured(PluginConfiguration config)
     {
-        return !string.IsNullOrWhiteSpace(config.OpenAiApiKey);
+        return string.Equals(GetCaptionPolishProvider(config), "OpenAI", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(config.OpenAiApiKey);
+    }
+
+    private static bool IsLocalCaptionPolish(PluginConfiguration config)
+    {
+        return string.Equals(GetCaptionPolishProvider(config), "Local", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCaptionPolishConfigured(PluginConfiguration config)
+    {
+        return IsOpenAiCaptionPolishConfigured(config)
+            || (IsLocalCaptionPolish(config) && Uri.TryCreate(config.LocalCaptionPolishUrl, UriKind.Absolute, out _));
+    }
+
+    private static string GetCaptionPolishProvider(PluginConfiguration config)
+    {
+        string provider = config.CaptionPolishProvider?.Trim() ?? string.Empty;
+        return provider.Equals("Local", StringComparison.OrdinalIgnoreCase)
+            ? "Local"
+            : provider.Equals("Disabled", StringComparison.OrdinalIgnoreCase)
+                ? "Disabled"
+                : "OpenAI";
+    }
+
+    private static string GetLocalCaptionPolishModel(PluginConfiguration config, bool isFull)
+    {
+        string configured = isFull ? config.LocalCaptionPolishFullModel : config.LocalCaptionPolishLiveModel;
+        return string.IsNullOrWhiteSpace(configured)
+            ? isFull ? "qwen3:8b" : "qwen3:4b"
+            : configured.Trim();
+    }
+
+    private async Task<string> SendLocalCaptionPolishAsync(
+        PluginConfiguration config,
+        string model,
+        string prompt,
+        string inputJson,
+        object schema,
+        string schemaName,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(120));
+        using var request = new HttpRequestMessage(HttpMethod.Post, config.LocalCaptionPolishUrl.Trim());
+        if (!string.IsNullOrWhiteSpace(config.LocalCaptionPolishApiKey))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.LocalCaptionPolishApiKey.Trim());
+        }
+
+        request.Content = JsonContent.Create(new
+        {
+            model,
+            messages = new[]
+            {
+                new { role = "system", content = prompt },
+                new { role = "user", content = inputJson }
+            },
+            temperature = 0,
+            stream = false,
+            response_format = new
+            {
+                type = "json_schema",
+                json_schema = new { name = schemaName, strict = true, schema }
+            }
+        }, options: JsonOptions);
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        using HttpResponseMessage response = await _captionPolishHttpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
+        string responseText = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+        stopwatch.Stop();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Local caption polish request failed with status {(int)response.StatusCode} after {stopwatch.ElapsedMilliseconds}ms: {responseText}"));
+        }
+
+        string outputText = ExtractLocalOutputText(responseText);
+        _logger.LogInformation(
+            "Auto-caption Local polish response: model={Model}; statusCode={StatusCode}; elapsedMs={ElapsedMs}; inputBytes={InputBytes}; responseBytes={ResponseBytes}",
+            model,
+            response.StatusCode,
+            stopwatch.ElapsedMilliseconds,
+            Encoding.UTF8.GetByteCount(inputJson),
+            responseText.Length);
+        return outputText;
+    }
+
+    private static string ExtractLocalOutputText(string responseText)
+    {
+        using JsonDocument document = JsonDocument.Parse(responseText);
+        if (TryFindStringProperty(document.RootElement, "content", out string? content))
+        {
+            return content ?? string.Empty;
+        }
+
+        throw new InvalidOperationException("Local caption polish response did not include chat completion content.");
+    }
+
+    private async Task WaitForLocalPolishGpuAsync(CaptionSessionState state, PluginConfiguration config)
+    {
+        bool waitingLogged = false;
+        while (_sessions.Values.Any(i => i.SessionId != state.SessionId
+            && i.Status is CaptionSessionStatuses.WarmingUp or CaptionSessionStatuses.Generating
+            && !string.Equals(i.ProcessingPhase, "polishing", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!waitingLogged)
+            {
+                _logger.LogInformation("Auto-caption local Full polish waiting for transcription to become idle: session={SessionId}; model={Model}", state.SessionId, GetLocalCaptionPolishModel(config, isFull: true));
+                waitingLogged = true;
+            }
+
+            state.Message = "Waiting for caption transcription to become idle before local Full polish.";
+            await Task.Delay(TimeSpan.FromSeconds(5), state.Cancellation.Token).ConfigureAwait(false);
+        }
     }
 
     private static string GetOpenAiCaptionPolishModel(PluginConfiguration config)
@@ -2428,25 +2697,35 @@ public class AutoGenerateCaptionService
             : config.OpenAiCaptionPolishModel.Trim();
     }
 
-    private static string GetOpenAiPolishCacheFingerprint(PluginConfiguration config)
+    private static string GetOpenAiPolishCacheFingerprint(PluginConfiguration config, bool isFullGeneration)
     {
-        if (!IsOpenAiCaptionPolishConfigured(config))
+        if (!IsCaptionPolishConfigured(config))
         {
-            return "openai-polish:off";
+            return "caption-polish:off";
         }
 
-        return string.Join(
-            '|',
-            "openai-polish:on",
+        var parts = new List<string>
+        {
+            "caption-polish:on",
+            GetCaptionPolishProvider(config),
             "direct-openai-cues:v1",
             "balanced-long-cues:v1",
             "read-only-context:v1",
             "speaker-preserving:v1",
-            GetOpenAiCaptionPolishModel(config),
+            IsLocalCaptionPolish(config)
+                ? GetLocalCaptionPolishModel(config, isFullGeneration)
+                : GetOpenAiCaptionPolishModel(config),
             Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.OpenAiPolishGuardBandSeconds, 0, 60).ToString(CultureInfo.InvariantCulture),
-            Math.Clamp(config.OpenAiPolishCueCount, 2, 80).ToString(CultureInfo.InvariantCulture));
+            Math.Clamp(config.OpenAiPolishCueCount, 2, 80).ToString(CultureInfo.InvariantCulture)
+        };
+        if (isFullGeneration)
+        {
+            parts.Add("full-batch-320-context-60:v1");
+        }
+
+        return string.Join('|', parts);
     }
 
     private async Task ExtractAudioChunkAsync(CaptionSessionState state, PluginConfiguration config, double startSeconds, double chunkSeconds, string audioPath)
@@ -2835,7 +3114,7 @@ public class AutoGenerateCaptionService
             Math.Clamp(config.MaxCueWords, 3, 40).ToString(CultureInfo.InvariantCulture),
             Math.Clamp(config.MaxCueDurationSeconds, 1.0, 15.0).ToString("0.###", CultureInfo.InvariantCulture),
             GetRemoteCacheFingerprint(config),
-            GetOpenAiPolishCacheFingerprint(config),
+            GetOpenAiPolishCacheFingerprint(config, state.IsPrefetch),
             fingerprint);
 
         state.CacheKey = HashString(keyMaterial);
@@ -3091,21 +3370,8 @@ public class AutoGenerateCaptionService
         string persistentCacheDirectory,
         string model)
     {
-        if (string.IsNullOrWhiteSpace(state.MediaPath))
-        {
-            throw new InvalidOperationException("Cannot promote Enhanced captions without a media path.");
-        }
-
         string language = NormalizePromotedLanguage(state.Language);
-        string mediaBaseName = Path.GetFileNameWithoutExtension(state.MediaPath);
-        DirectoryInfo mediaCacheDirectory = new(persistentCacheDirectory);
-        string cacheRoot = mediaCacheDirectory.Parent?.Parent?.FullName
-            ?? throw new DirectoryNotFoundException("Cannot resolve the generated-caption cache root.");
-        string promotedDirectory = Path.Combine(cacheRoot, "promoted", state.ItemId.ToString("N"));
-        Directory.CreateDirectory(promotedDirectory);
-        string enhancedPath = Path.Combine(
-            promotedDirectory,
-            string.Create(CultureInfo.InvariantCulture, $"{mediaBaseName}.{EnhancedSubtitleTitle}.{language}.vtt"));
+        string enhancedPath = GetEnhancedSubtitlePath(state);
         string temporaryPath = enhancedPath + ".tmp-" + state.SessionId.ToString("N");
         List<CaptionCue> completedCues;
         lock (state.SyncRoot)
@@ -3114,6 +3380,20 @@ public class AutoGenerateCaptionService
                 .OrderBy(i => i.StartTicks)
                 .ThenBy(i => i.EndTicks)
                 .ToList();
+        }
+
+        List<MediaStream> streams = _mediaStreamRepository
+            .GetMediaStreams(new MediaStreamQuery { ItemId = state.ItemId })
+            .ToList();
+        MediaStream? existing = streams.FirstOrDefault(i =>
+            i.Type == MediaStreamType.Subtitle
+            && i.IsExternal
+            && string.Equals(i.Path, enhancedPath, StringComparison.OrdinalIgnoreCase));
+        if (File.Exists(enhancedPath) && !state.OverwriteExistingSubtitle)
+        {
+            throw new IOException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Refusing to replace existing subtitle sidecar without explicit overwrite permission: {enhancedPath}"));
         }
 
         try
@@ -3129,13 +3409,6 @@ public class AutoGenerateCaptionService
             }
         }
 
-        List<MediaStream> streams = _mediaStreamRepository
-            .GetMediaStreams(new MediaStreamQuery { ItemId = state.ItemId })
-            .ToList();
-        MediaStream? existing = streams.FirstOrDefault(i =>
-            i.Type == MediaStreamType.Subtitle
-            && i.IsExternal
-            && string.Equals(i.Path, enhancedPath, StringComparison.OrdinalIgnoreCase));
         int streamIndex = existing?.Index ?? (streams.Count == 0 ? 0 : streams.Max(i => i.Index) + 1);
         if (existing is not null)
         {
@@ -3155,6 +3428,8 @@ public class AutoGenerateCaptionService
             Path = enhancedPath
         });
         _mediaStreamRepository.SaveMediaStreams(state.ItemId, streams, state.Cancellation.Token);
+        QueueEnhancedSubtitleLibraryRefresh(state.ItemId, enhancedPath);
+        ScheduleEnhancedSubtitleTitleReapply(state.ItemId, enhancedPath, language);
 
         Directory.CreateDirectory(persistentCacheDirectory);
         File.WriteAllText(
@@ -3187,32 +3462,119 @@ public class AutoGenerateCaptionService
         return Task.CompletedTask;
     }
 
-    private void RemovePromotedEnhancedSubtitles(Video video)
+    /// <summary>
+    /// Reapplies the friendly Jellyfin label to an existing Plex-compatible Enhanced sidecar.
+    /// </summary>
+    /// <param name="video">The library video that owns the sidecar.</param>
+    /// <returns>Whether a matching sidecar stream was labeled.</returns>
+    public bool TryReapplyEnhancedSubtitleTitle(Video video)
     {
-        if (!string.IsNullOrWhiteSpace(video.Path))
+        if (string.IsNullOrWhiteSpace(video.Path))
         {
-            string? directory = Path.GetDirectoryName(video.Path);
-            string baseName = Path.GetFileNameWithoutExtension(video.Path);
-            if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
-            {
-                foreach (string path in Directory.EnumerateFiles(
-                             directory,
-                             baseName + "." + EnhancedSubtitleTitle + ".*.vtt",
-                             SearchOption.TopDirectoryOnly))
-                {
-                    try
-                    {
-                        File.Delete(path);
-                        _logger.LogInformation("Deleted promoted Enhanced subtitle for item {ItemId}: {SubtitlePath}", video.Id, path);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to delete promoted Enhanced subtitle for item {ItemId}: {SubtitlePath}", video.Id, path);
-                    }
-                }
-            }
+            return false;
         }
 
+        string enhancedPath = GetEnhancedSubtitlePath(video.Path, "eng");
+        return TryApplyEnhancedSubtitleTitle(video.Id, enhancedPath, "eng");
+    }
+
+    private void ScheduleEnhancedSubtitleTitleReapply(Guid itemId, string enhancedPath, string language)
+    {
+        _ = Task.Run(async () =>
+        {
+            foreach (TimeSpan delay in new[]
+            {
+                TimeSpan.FromSeconds(3),
+                TimeSpan.FromSeconds(15),
+                TimeSpan.FromSeconds(45),
+                TimeSpan.FromMinutes(2)
+            })
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+                if (TryApplyEnhancedSubtitleTitle(itemId, enhancedPath, language))
+                {
+                    _logger.LogInformation(
+                        "Reapplied Enhanced subtitle title after library scan: item={ItemId}; path={SubtitlePath}",
+                        itemId,
+                        enhancedPath);
+                }
+            }
+        });
+    }
+
+    private void QueueEnhancedSubtitleLibraryRefresh(Guid itemId, string enhancedPath)
+    {
+        try
+        {
+            _providerManager.QueueRefresh(
+                itemId,
+                new MetadataRefreshOptions(_directoryService),
+                RefreshPriority.High);
+            _logger.LogInformation(
+                "Queued Jellyfin library refresh for promoted Enhanced subtitle: item={ItemId}; path={SubtitlePath}",
+                itemId,
+                enhancedPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not queue Jellyfin library refresh for promoted Enhanced subtitle: item={ItemId}; path={SubtitlePath}",
+                itemId,
+                enhancedPath);
+        }
+    }
+
+    private bool TryApplyEnhancedSubtitleTitle(Guid itemId, string enhancedPath, string language)
+    {
+        if (!File.Exists(enhancedPath))
+        {
+            return false;
+        }
+
+        List<MediaStream> streams = _mediaStreamRepository
+            .GetMediaStreams(new MediaStreamQuery { ItemId = itemId })
+            .ToList();
+        MediaStream? stream = streams.FirstOrDefault(i =>
+            i.Type == MediaStreamType.Subtitle
+            && i.IsExternal
+            && string.Equals(i.Path, enhancedPath, StringComparison.OrdinalIgnoreCase));
+        if (stream is null)
+        {
+            return false;
+        }
+
+        stream.Title = EnhancedSubtitleTitle;
+        stream.Language = language;
+        stream.Codec = "webvtt";
+        _mediaStreamRepository.SaveMediaStreams(itemId, streams, CancellationToken.None);
+        return true;
+    }
+
+    private static string GetEnhancedSubtitlePath(CaptionSessionState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.MediaPath))
+        {
+            throw new InvalidOperationException("Cannot resolve the Enhanced subtitle path without a media path.");
+        }
+
+        return GetEnhancedSubtitlePath(state.MediaPath, NormalizePromotedLanguage(state.Language));
+    }
+
+    private static string GetEnhancedSubtitlePath(string mediaPath, string language)
+    {
+        string? mediaDirectory = Path.GetDirectoryName(mediaPath);
+        if (string.IsNullOrWhiteSpace(mediaDirectory))
+        {
+            throw new DirectoryNotFoundException("Cannot resolve the media directory for the Enhanced subtitle.");
+        }
+
+        string mediaBaseName = Path.GetFileNameWithoutExtension(mediaPath);
+        return Path.Combine(mediaDirectory, string.Create(CultureInfo.InvariantCulture, $"{mediaBaseName}.{language}.vtt"));
+    }
+
+    private void RemovePromotedEnhancedSubtitles(Video video)
+    {
         List<MediaStream> streams = _mediaStreamRepository
             .GetMediaStreams(new MediaStreamQuery { ItemId = video.Id })
             .ToList();
@@ -3252,7 +3614,12 @@ public class AutoGenerateCaptionService
 
     private static string NormalizePromotedLanguage(string language)
     {
-        return string.Equals(language, "en", StringComparison.OrdinalIgnoreCase) ? "eng" : "und";
+        return string.IsNullOrWhiteSpace(language)
+            || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, "en", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(language, "eng", StringComparison.OrdinalIgnoreCase)
+            ? "eng"
+            : language.Trim().ToLowerInvariant();
     }
 
     private static void WriteVtt(string vttPath, IReadOnlyList<CaptionCue> cues)
@@ -3360,6 +3727,8 @@ public class AutoGenerateCaptionService
         public string Mode { get; init; } = CaptionGenerationModes.Live;
 
         public bool IsDiarized { get; init; }
+
+        public bool OverwriteExistingSubtitle { get; init; }
 
         public bool EnhancedReady { get; set; }
 

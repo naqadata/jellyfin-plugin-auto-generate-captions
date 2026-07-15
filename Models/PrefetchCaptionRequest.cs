@@ -25,4 +25,9 @@ public class PrefetchCaptionRequest
     /// Null uses server configuration.
     /// </summary>
     public bool? EnableOpenAiPolish { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether a server-side Enhanced job may replace an existing sidecar subtitle.
+    /// </summary>
+    public bool OverwriteExistingSubtitle { get; set; }
 }

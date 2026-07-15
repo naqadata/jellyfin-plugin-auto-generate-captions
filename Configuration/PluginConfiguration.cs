@@ -128,7 +128,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public int LiveRevisionTailSeconds { get; set; } = 10;
 
     /// <summary>
-    /// Gets or sets a value indicating whether clients may start full-item background caption jobs.
+    /// Gets or sets a value indicating whether the server-side Enhanced queue may start full-item background caption jobs.
     /// </summary>
     public bool EnableBackgroundPrefetch { get; set; } = true;
 
@@ -148,6 +148,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool EnableOpenAiCaptionPolish { get; set; }
 
     /// <summary>
+    /// Gets or sets the provider used to polish generated captions. Supported values are Disabled, OpenAI, and Local.
+    /// </summary>
+    public string CaptionPolishProvider { get; set; } = "OpenAI";
+
+    /// <summary>
     /// Gets or sets the OpenAI API key used for optional caption polishing.
     /// </summary>
     public string OpenAiApiKey { get; set; } = string.Empty;
@@ -156,6 +161,26 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the OpenAI model used for optional caption polishing.
     /// </summary>
     public string OpenAiCaptionPolishModel { get; set; } = "gpt-5.4-mini";
+
+    /// <summary>
+    /// Gets or sets the OpenAI-compatible local caption-polish endpoint, such as http://llm-host:11434/v1/chat/completions.
+    /// </summary>
+    public string LocalCaptionPolishUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the optional bearer token for the local caption-polish endpoint.
+    /// </summary>
+    public string LocalCaptionPolishApiKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the compact local model used for opportunistic Live caption polish.
+    /// </summary>
+    public string LocalCaptionPolishLiveModel { get; set; } = "qwen3:4b";
+
+    /// <summary>
+    /// Gets or sets the larger local model used for queued Full caption polish after transcription is idle.
+    /// </summary>
+    public string LocalCaptionPolishFullModel { get; set; } = "qwen3:8b";
 
     /// <summary>
     /// Gets or sets the generated-caption lookahead required before OpenAI polishing starts.

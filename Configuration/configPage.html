@@ -5,7 +5,20 @@
     <title>Auto Generate Captions</title>
     <style>
         .captionTabs { display: flex; gap: .5em; margin-bottom: 1.5em; }
-        .captionTab { min-width: 8em; }
+        .captionTabs .captionTab {
+            min-width: 8em;
+            background: #252525 !important;
+            border: 1px solid #4a4a4a !important;
+            color: #f5f5f5 !important;
+            box-shadow: none !important;
+        }
+        .captionTabs .captionTab:hover,
+        .captionTabs .captionTab:focus { background: #333 !important; }
+        .captionTabs .captionTab.raised {
+            background: #3b3b3b !important;
+            border-color: #00a4dc !important;
+            box-shadow: inset 0 -3px #00a4dc !important;
+        }
         .captionProcessingHeader { display: flex; align-items: center; justify-content: space-between; gap: 1em; margin-bottom: 1em; }
         .captionProcessingHeader h2 { margin: 0; }
         .captionSummary { display: flex; flex-wrap: wrap; gap: .75em; margin-bottom: 1.25em; }
@@ -31,8 +44,9 @@
         <div data-role="content">
             <div class="content-primary">
                 <div class="captionTabs">
-                    <button id="CaptionSettingsTab" is="emby-button" type="button" class="captionTab raised emby-button"><span>Settings</span></button>
-                    <button id="CaptionProcessingTab" is="emby-button" type="button" class="captionTab emby-button"><span>Processing</span></button>
+                    <button id="CaptionSettingsTab" is="emby-button" type="button" class="captionTab raised emby-button" style="background:#3b3b3b!important;border:1px solid #00a4dc!important;box-shadow:inset 0 -3px #00a4dc!important;color:#f5f5f5!important"><span>Settings</span></button>
+                    <button id="CaptionProcessingTab" is="emby-button" type="button" class="captionTab emby-button" style="background:#252525!important;border:1px solid #4a4a4a!important;box-shadow:none!important;color:#f5f5f5!important"><span>Processing</span></button>
+                    <button id="CaptionQueueTab" is="emby-button" type="button" class="captionTab emby-button" style="background:#252525!important;border:1px solid #4a4a4a!important;box-shadow:none!important;color:#f5f5f5!important"><span>Enhanced Queue</span></button>
                 </div>
                 <div id="CaptionSettingsPanel">
                     <form id="AutoGenerateCaptionsConfigForm">
@@ -168,9 +182,9 @@
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
                             <input id="EnableBackgroundPrefetch" name="EnableBackgroundPrefetch" type="checkbox" is="emby-checkbox" />
-                            <span>Allow Full background transcription</span>
+                            <span>Enable server-side Enhanced queue</span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Let supported clients explicitly start full-item transcription at background priority.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Allow this plugin's administrator queue to start durable full-item transcription at background priority.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="BackgroundSliceSeconds">Background worker slice seconds</label>
@@ -187,9 +201,18 @@
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label">
                             <input id="EnableOpenAiCaptionPolish" name="EnableOpenAiCaptionPolish" type="checkbox" is="emby-checkbox" />
-                            <span>Polish generated captions with OpenAI</span>
+                            <span>Polish generated captions</span>
                         </label>
-                        <div class="fieldDescription checkboxFieldDescription">Clean up text and sentence breaks in buffered Live captions and after Full transcription and diarization.</div>
+                        <div class="fieldDescription checkboxFieldDescription">Clean up text and sentence breaks in buffered Live captions and after Full transcription and diarization. Select a provider below.</div>
+                    </div>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="CaptionPolishProvider">Caption polish provider</label>
+                        <select id="CaptionPolishProvider" name="CaptionPolishProvider" is="emby-select">
+                            <option value="Disabled">Disabled</option>
+                            <option value="OpenAI">OpenAI</option>
+                            <option value="Local">Local (Ollama or compatible)</option>
+                        </select>
+                        <div class="fieldDescription">Local uses an OpenAI-compatible <code>/v1/chat/completions</code> endpoint with strict JSON output.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API key</label>
@@ -200,6 +223,26 @@
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiCaptionPolishModel">OpenAI polish model</label>
                         <input id="OpenAiCaptionPolishModel" name="OpenAiCaptionPolishModel" type="text" is="emby-input" />
                         <div class="fieldDescription">Model used for buffered caption cleanup.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishUrl">Local polish URL</label>
+                        <input id="LocalCaptionPolishUrl" name="LocalCaptionPolishUrl" type="url" is="emby-input" placeholder="http://llm-host:11434/v1/chat/completions" />
+                        <div class="fieldDescription">Ollama's OpenAI-compatible endpoint, or another compatible local server. Keep it on your private network.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishApiKey">Local polish API key</label>
+                        <input id="LocalCaptionPolishApiKey" name="LocalCaptionPolishApiKey" type="password" is="emby-input" />
+                        <div class="fieldDescription">Optional bearer token for a protected local endpoint.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishLiveModel">Local Live polish model</label>
+                        <input id="LocalCaptionPolishLiveModel" name="LocalCaptionPolishLiveModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Use a compact 3–4B 4-bit model so Live polish can coexist with Whisper.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishFullModel">Local Full polish model</label>
+                        <input id="LocalCaptionPolishFullModel" name="LocalCaptionPolishFullModel" type="text" is="emby-input" />
+                        <div class="fieldDescription">Use a larger 7–8B 4-bit model. Enhanced jobs wait for other plugin transcription to become idle before using it.</div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishLookaheadSeconds">OpenAI polish lookahead seconds</label>
@@ -309,6 +352,39 @@
                     </div>
                     <div id="CaptionProcessingUpdated" class="fieldDescription"></div>
                     <div id="CaptionProcessingJobs"></div>
+                    <h3>Enhanced queue</h3>
+                    <div class="captionTabs">
+                        <button id="CaptionQueueClearWaiting" is="emby-button" type="button" class="emby-button"><span>Clear Waiting</span></button>
+                        <button id="CaptionQueueClearHistory" is="emby-button" type="button" class="emby-button"><span>Clear History</span></button>
+                    </div>
+                    <div id="CaptionQueueProcessingSummary" class="captionJobMeta"></div>
+                    <div id="CaptionQueueProcessingJobs"></div>
+                </div>
+                <div id="CaptionQueuePanel" style="display: none;">
+                    <div class="captionProcessingHeader">
+                        <div>
+                            <h2>Server-side Enhanced queue</h2>
+                            <div class="fieldDescription">Queue movies, episodes, seasons, or whole series. Jobs survive Jellyfin restarts and write durable Plex-compatible <code>.eng.vtt</code> sidecars beside the media file.</div>
+                        </div>
+                        <button id="CaptionQueueRefresh" is="emby-button" type="button" class="raised emby-button"><span>Refresh</span></button>
+                    </div>
+                    <div class="captionTabs">
+                        <button id="CaptionQueueShows" is="emby-button" type="button" class="raised emby-button"><span>TV Shows</span></button>
+                        <button id="CaptionQueueMovies" is="emby-button" type="button" class="emby-button"><span>Movies</span></button>
+                    </div>
+                    <div class="inputContainer">
+                        <label id="CaptionQueueBrowseLabel" class="inputLabel inputLabelUnfocused" for="CaptionQueueSearch">Find a TV show</label>
+                        <input id="CaptionQueueSearch" type="text" is="emby-input" placeholder="Search show titles only" />
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="CaptionQueueOverwrite" type="checkbox" is="emby-checkbox" />
+                            <span>Replace existing .eng.vtt sidecars</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. Enable to replace older generated captions or another subtitle you intend to replace; this also bypasses a completed cache and retranscribes the item.</div>
+                    </div>
+                    <div id="CaptionQueueBreadcrumb" class="captionJobMeta"></div>
+                    <div id="CaptionQueueSearchResults"></div>
                 </div>
             </div>
         </div>
@@ -337,13 +413,26 @@
                 return value[pascalName];
             }
 
+            function setDarkButton(button, active) {
+                button.style.setProperty('background', active ? '#3b3b3b' : '#252525', 'important');
+                button.style.setProperty('border', active ? '1px solid #00a4dc' : '1px solid #4a4a4a', 'important');
+                button.style.setProperty('box-shadow', active ? 'inset 0 -3px #00a4dc' : 'none', 'important');
+                button.style.setProperty('color', '#f5f5f5', 'important');
+            }
+
             function setCaptionTab(tab) {
                 var processing = tab === 'processing';
-                document.querySelector('#CaptionSettingsPanel').style.display = processing ? 'none' : '';
+                var queue = tab === 'queue';
+                document.querySelector('#CaptionSettingsPanel').style.display = processing || queue ? 'none' : '';
                 document.querySelector('#CaptionProcessingPanel').style.display = processing ? '' : 'none';
-                document.querySelector('#CaptionSettingsTab').classList.toggle('raised', !processing);
+                document.querySelector('#CaptionQueuePanel').style.display = queue ? '' : 'none';
+                document.querySelector('#CaptionSettingsTab').classList.toggle('raised', !processing && !queue);
                 document.querySelector('#CaptionProcessingTab').classList.toggle('raised', processing);
-                if (processing) {
+                document.querySelector('#CaptionQueueTab').classList.toggle('raised', queue);
+                setDarkButton(document.querySelector('#CaptionSettingsTab'), !processing && !queue);
+                setDarkButton(document.querySelector('#CaptionProcessingTab'), processing);
+                setDarkButton(document.querySelector('#CaptionQueueTab'), queue);
+                if (processing || queue) {
                     loadCaptionProcessing();
                     if (!AutoGenerateCaptionsConfig.processingTimer) {
                         AutoGenerateCaptionsConfig.processingTimer = setInterval(loadCaptionProcessing, 3000);
@@ -371,8 +460,15 @@
                 var mode = apiValue(job, 'mode');
                 var processingPhase = apiValue(job, 'processingPhase');
                 var status = apiValue(job, 'status');
+                var progressPercent = apiValue(job, 'progressPercent') || 0;
+                if (status === 'stopped' || status === 'failed' || status === 'skipped' || status === 'complete' || status === 'cached') {
+                    return status;
+                }
+                if (processingPhase === 'polishing') {
+                    return 'Polishing';
+                }
                 if (workerState === 'queued') {
-                    return 'Queued on worker';
+                    return progressPercent > 0 ? (mode === 'full' ? 'Transcribing / diarizing' : 'Transcribing') : 'Queued on worker';
                 }
                 if (workerState === 'running') {
                     return mode === 'full' ? 'Transcribing / diarizing' : 'Transcribing';
@@ -390,6 +486,7 @@
                 document.querySelector('#CaptionProcessingUpdated').textContent = 'Updated ' + formatCaptionTime(apiValue(snapshot, 'generatedAt'));
 
                 var jobsNode = document.querySelector('#CaptionProcessingJobs');
+                var historyWasOpen = document.querySelector('#CaptionProcessingHistory')?.open || false;
                 jobsNode.replaceChildren();
                 var jobs = apiValue(snapshot, 'jobs');
                 if (!jobs || jobs.length === 0) {
@@ -397,61 +494,383 @@
                     return;
                 }
 
-                jobs.forEach(function (job) {
-                    var mode = apiValue(job, 'mode');
-                    var priority = apiValue(job, 'priority');
-                    var progressPercent = apiValue(job, 'progressPercent') || 0;
-                    var workerJobId = apiValue(job, 'workerJobId');
-                    var message = apiValue(job, 'message');
-                    var card = document.createElement('div');
-                    card.className = 'captionJob';
-                    var header = document.createElement('div');
-                    header.className = 'captionJobHeader';
-                    captionText(header, 'captionJobTitle', apiValue(job, 'itemName') || 'Unknown item');
-                    captionText(header, 'captionJobStatus', captionJobStatus(job));
-                    card.appendChild(header);
-
-                    var meta = document.createElement('div');
-                    meta.className = 'captionJobMeta';
-                    captionText(meta, '', mode === 'full' ? 'Enhanced' : 'Live');
-                    captionText(meta, '', 'Priority: ' + (priority || 'unknown'));
-                    captionText(meta, '', 'Progress: ' + progressPercent + '%');
-                    captionText(meta, '', 'Created: ' + formatCaptionTime(apiValue(job, 'createdAt')));
-                    if (workerJobId) {
-                        captionText(meta, '', 'Worker: ' + workerJobId.substring(0, 8));
+                function renderCompactRow(job, includeProgress) {
+                    var progressPercent = Math.max(0, Math.min(100, apiValue(job, 'progressPercent') || 0));
+                    var message = apiValue(job, 'message') || '';
+                    var row = document.createElement('div');
+                    row.style.setProperty('display', 'grid');
+                    row.style.setProperty('grid-template-columns', 'minmax(14em, 1fr) minmax(7em, 10em) auto');
+                    row.style.setProperty('align-items', 'center');
+                    row.style.setProperty('gap', '.75em');
+                    row.style.setProperty('padding', '.55em 0');
+                    row.style.setProperty('border-bottom', '1px solid #303030');
+                    row.title = message;
+                    captionText(row, 'captionJobTitle', apiValue(job, 'itemName') || 'Unknown item');
+                    captionText(row, 'captionJobStatus', captionJobStatus(job));
+                    if (includeProgress) {
+                        var progressCell = document.createElement('div');
+                        progressCell.style.setProperty('min-width', '6em');
+                        captionText(progressCell, 'captionJobStatus', apiValue(job, 'processingPhase') === 'polishing' ? 'Polishing' : progressPercent + '%');
+                        var progress = document.createElement('div');
+                        progress.className = 'captionProgress';
+                        progress.style.setProperty('margin-top', '.25em');
+                        var progressValue = document.createElement('div');
+                        progressValue.className = 'captionProgressValue';
+                        progressValue.style.width = progressPercent + '%';
+                        progress.appendChild(progressValue);
+                        progressCell.appendChild(progress);
+                        row.appendChild(progressCell);
+                    } else {
+                        captionText(row, 'captionJobMeta', formatCaptionTime(apiValue(job, 'completedAt') || apiValue(job, 'createdAt')));
                     }
-                    card.appendChild(meta);
+                    jobsNode.appendChild(row);
+                }
 
-                    if (message) {
-                        captionText(card, 'captionJobMessage', message);
-                    }
-
-                    var progress = document.createElement('div');
-                    progress.className = 'captionProgress';
-                    var progressValue = document.createElement('div');
-                    progressValue.className = 'captionProgressValue';
-                    progressValue.style.width = Math.max(0, Math.min(100, progressPercent)) + '%';
-                    progress.appendChild(progressValue);
-                    card.appendChild(progress);
-                    jobsNode.appendChild(card);
+                var active = jobs.filter(function (job) {
+                    var status = apiValue(job, 'status');
+                    return status === 'warming-up' || status === 'generating';
                 });
+                var history = jobs.filter(function (job) { return active.indexOf(job) === -1; });
+                if (active.length > 0) {
+                    captionText(jobsNode, 'captionJobTitle', 'Active work');
+                    active.forEach(function (job) { renderCompactRow(job, true); });
+                }
+                if (history.length > 0) {
+                    var historyDetails = document.createElement('details');
+                    historyDetails.id = 'CaptionProcessingHistory';
+                    historyDetails.open = historyWasOpen;
+                    historyDetails.style.setProperty('margin-top', active.length > 0 ? '1em' : '0');
+                    var summary = document.createElement('summary');
+                    summary.textContent = 'Recent history (' + history.length + ')';
+                    summary.style.setProperty('font-weight', '700');
+                    summary.style.setProperty('cursor', 'pointer');
+                    historyDetails.appendChild(summary);
+                    var historyRows = document.createElement('div');
+                    historyRows.style.setProperty('margin-top', '.5em');
+                    var originalNode = jobsNode;
+                    jobsNode = historyRows;
+                    history.slice(0, 20).forEach(function (job) { renderCompactRow(job, false); });
+                    jobsNode = originalNode;
+                    historyDetails.appendChild(historyRows);
+                    jobsNode.appendChild(historyDetails);
+                }
             }
 
             function loadCaptionProcessing() {
                 var url = ApiClient.getUrl('AutoGenerateCaptions/Admin/Jobs', { limit: 50 });
-                return ApiClient.getJSON(url).then(renderCaptionProcessing).catch(function (error) {
+                var processing = ApiClient.getJSON(url).then(renderCaptionProcessing).catch(function (error) {
                     var jobsNode = document.querySelector('#CaptionProcessingJobs');
                     jobsNode.replaceChildren();
                     captionText(jobsNode, 'captionEmpty captionError', 'Could not load caption processing: ' + (error.message || error));
                 });
+                return Promise.all([processing, loadCaptionQueue()]);
+            }
+
+            function renderCaptionQueue(jobs) {
+                var jobsNode = document.querySelector('#CaptionQueueProcessingJobs');
+                var summaryNode = document.querySelector('#CaptionQueueProcessingSummary');
+                var waitingWasOpen = document.querySelector('#CaptionQueueWaiting')?.open || false;
+                jobsNode.replaceChildren();
+                summaryNode.replaceChildren();
+                if (!jobs || jobs.length === 0) {
+                    captionText(jobsNode, 'captionEmpty', 'No Enhanced captions are queued.');
+                    return;
+                }
+
+                var running = jobs.filter(function (job) { return apiValue(job, 'status') === 'running'; });
+                var polishing = jobs.filter(function (job) { return apiValue(job, 'status') === 'polishing'; });
+                var queued = jobs.filter(function (job) { return apiValue(job, 'status') === 'queued'; });
+                captionText(summaryNode, '', running.length + ' running');
+                if (polishing.length > 0) {
+                    captionText(summaryNode, '', polishing.length + ' polishing');
+                }
+                captionText(summaryNode, '', queued.length + ' waiting');
+
+                function renderQueueRow(job, target) {
+                    var card = document.createElement('div');
+                    card.style.setProperty('display', 'grid');
+                    card.style.setProperty('grid-template-columns', 'minmax(12em, 1fr) minmax(7em, 11em) auto');
+                    card.style.setProperty('align-items', 'center');
+                    card.style.setProperty('gap', '.5em');
+                    card.style.setProperty('padding', '.45em 0');
+                    card.style.setProperty('border-bottom', '1px solid #303030');
+                    captionText(card, 'captionJobTitle', apiValue(job, 'itemName') || 'Unknown item');
+                    var status = apiValue(job, 'status') || 'unknown';
+                    var progressPercent = Math.max(0, Math.min(100, apiValue(job, 'progressPercent') || 0));
+                    var processingPhase = apiValue(job, 'processingPhase') || '';
+                    var progressCell = document.createElement('div');
+                    progressCell.style.setProperty('min-width', '7em');
+                    if (status === 'queued') {
+                        captionText(progressCell, 'captionJobStatus', 'Queued');
+                    } else if (status === 'polishing' || (status === 'running' && processingPhase === 'polishing')) {
+                        captionText(progressCell, 'captionJobStatus', 'Polishing');
+                    } else if (status === 'running') {
+                        var progressLabel = captionText(progressCell, 'captionJobStatus', progressPercent + '%');
+                        progressLabel.style.setProperty('display', 'block');
+                        var progress = document.createElement('div');
+                        progress.className = 'captionProgress';
+                        progress.style.setProperty('margin-top', '.25em');
+                        var progressValue = document.createElement('div');
+                        progressValue.className = 'captionProgressValue';
+                        progressValue.style.width = progressPercent + '%';
+                        progress.appendChild(progressValue);
+                        progressCell.appendChild(progress);
+                    } else {
+                        captionText(progressCell, 'captionJobStatus', status);
+                    }
+                    progressCell.title = apiValue(job, 'message') || '';
+                    card.appendChild(progressCell);
+                    var action = null;
+                    if (status === 'queued' || status === 'running' || status === 'polishing') {
+                        action = document.createElement('button');
+                        action.textContent = status === 'queued' ? 'Remove' : 'Cancel';
+                        action.addEventListener('click', function () { manageCaptionQueueJob(apiValue(job, 'id'), 'Cancel'); });
+                    } else if (status === 'failed' || status === 'stopped') {
+                        action = document.createElement('button');
+                        action.textContent = 'Retry';
+                        action.addEventListener('click', function () { manageCaptionQueueJob(apiValue(job, 'id'), 'Retry'); });
+                    }
+                    if (action) {
+                        action.type = 'button';
+                        action.className = 'emby-button';
+                        setDarkButton(action, false);
+                        action.style.setProperty('white-space', 'nowrap');
+                        card.appendChild(action);
+                    }
+                    target.appendChild(card);
+                }
+
+                running.forEach(function (job) { renderQueueRow(job, jobsNode); });
+                polishing.forEach(function (job) { renderQueueRow(job, jobsNode); });
+                if (queued.length > 0) {
+                    var waitingDetails = document.createElement('details');
+                    waitingDetails.id = 'CaptionQueueWaiting';
+                    waitingDetails.open = waitingWasOpen;
+                    waitingDetails.style.setProperty('margin-top', (running.length + polishing.length) > 0 ? '.75em' : '0');
+                    var waitingSummary = document.createElement('summary');
+                    waitingSummary.textContent = 'Waiting queue (' + queued.length + ')';
+                    waitingSummary.style.setProperty('font-weight', '700');
+                    waitingSummary.style.setProperty('cursor', 'pointer');
+                    waitingDetails.appendChild(waitingSummary);
+                    var waitingRows = document.createElement('div');
+                    waitingRows.style.setProperty('margin-top', '.5em');
+                    queued.forEach(function (job) { renderQueueRow(job, waitingRows); });
+                    waitingDetails.appendChild(waitingRows);
+                    jobsNode.appendChild(waitingDetails);
+                }
+            }
+
+            function manageCaptionQueueJob(jobId, action) {
+                var verb = action === 'Retry' ? 'retry' : 'cancel or remove';
+                if (!window.confirm('Do you want to ' + verb + ' this Enhanced queue job?')) {
+                    return;
+                }
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('AutoGenerateCaptions/Admin/Queue/' + jobId + '/' + action), dataType: 'json' })
+                    .then(loadCaptionProcessing)
+                    .catch(function (error) { alert('Could not update queue job: ' + (error.message || error)); });
+            }
+
+            function clearCaptionQueue(scope) {
+                var label = scope === 'history' ? 'completed, failed, and cancelled history' : 'all waiting jobs';
+                if (!window.confirm('Clear ' + label + '?')) {
+                    return;
+                }
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('AutoGenerateCaptions/Admin/Queue/Clear', { scope: scope }), dataType: 'json' })
+                    .then(loadCaptionProcessing)
+                    .catch(function (error) { alert('Could not clear queue: ' + (error.message || error)); });
+            }
+
+            function loadCaptionQueue() {
+                return ApiClient.getJSON(ApiClient.getUrl('AutoGenerateCaptions/Admin/Queue', { limit: 100 }))
+                    .then(renderCaptionQueue)
+                    .catch(function (error) {
+                        var jobsNode = document.querySelector('#CaptionQueueProcessingJobs');
+                        jobsNode.replaceChildren();
+                        captionText(jobsNode, 'captionEmpty captionError', 'Could not load Enhanced queue: ' + (error.message || error));
+                    });
+            }
+
+            function setCaptionQueueKind(kind) {
+                AutoGenerateCaptionsConfig.queueKind = kind;
+                AutoGenerateCaptionsConfig.queueParent = null;
+                document.querySelector('#CaptionQueueSearch').value = '';
+                document.querySelector('#CaptionQueueSearch').placeholder = kind === 'series' ? 'Search show titles only' : 'Search movie titles only';
+                document.querySelector('#CaptionQueueBrowseLabel').textContent = kind === 'series' ? 'Find a TV show' : 'Find a movie';
+                document.querySelector('#CaptionQueueBreadcrumb').replaceChildren();
+                document.querySelector('#CaptionQueueSearchResults').replaceChildren();
+                document.querySelector('#CaptionQueueShows').classList.toggle('raised', kind === 'series');
+                document.querySelector('#CaptionQueueMovies').classList.toggle('raised', kind === 'movies');
+                setDarkButton(document.querySelector('#CaptionQueueShows'), kind === 'series');
+                setDarkButton(document.querySelector('#CaptionQueueMovies'), kind === 'movies');
+            }
+
+            function queueCaptionItem(item, card) {
+                var overwrite = document.querySelector('#CaptionQueueOverwrite').checked;
+                var url = ApiClient.getUrl('AutoGenerateCaptions/Admin/Queue/' + apiValue(item, 'id'), { overwriteExistingSubtitle: overwrite });
+                return ApiClient.ajax({ type: 'POST', url: url, dataType: 'json' }).then(function () {
+                    loadCaptionQueue();
+                }).catch(function (error) {
+                    captionText(card, 'captionJobMessage captionError', error.message || error);
+                });
+            }
+
+            function renderCaptionBreadcrumb(trail, terminalLabel) {
+                var breadcrumb = document.querySelector('#CaptionQueueBreadcrumb');
+                breadcrumb.replaceChildren();
+                breadcrumb.removeAttribute('style');
+                if ((!trail || trail.length === 0) && !terminalLabel) {
+                    return;
+                }
+
+                breadcrumb.style.setProperty('display', 'flex');
+                breadcrumb.style.setProperty('align-items', 'center');
+                breadcrumb.style.setProperty('gap', '.45em');
+                breadcrumb.style.setProperty('padding', '.75em 0');
+                breadcrumb.style.setProperty('margin-bottom', '.5em');
+                breadcrumb.style.setProperty('border-bottom', '1px solid #3b3b3b');
+                breadcrumb.style.setProperty('font-weight', '700');
+                (trail || []).forEach(function (entry) {
+                    var link = document.createElement('a');
+                    link.href = '#';
+                    link.textContent = entry.label;
+                    link.style.setProperty('color', '#f5f5f5');
+                    link.style.setProperty('text-decoration', 'underline');
+                    link.style.setProperty('cursor', 'pointer');
+                    link.addEventListener('click', function (event) {
+                        event.preventDefault();
+                        document.querySelector('#CaptionQueueSearch').value = entry.query || '';
+                        browseCaptionQueue(entry.kind, entry.parentId, entry.parentName, entry.trail || []);
+                    });
+                    breadcrumb.appendChild(link);
+                    captionText(breadcrumb, '', '›');
+                });
+                captionText(breadcrumb, '', terminalLabel);
+            }
+
+            function renderCaptionBrowse(items, kind, parentName, parentId, trail) {
+                var resultsNode = document.querySelector('#CaptionQueueSearchResults');
+                resultsNode.replaceChildren();
+                renderCaptionBreadcrumb(trail, parentName ? (kind === 'seasons' ? 'Seasons' : 'Episodes') : '');
+                if (!items || items.length === 0) {
+                    captionText(resultsNode, 'captionEmpty', 'No matching ' + (kind === 'series' ? 'shows' : kind) + ' found.');
+                    return;
+                }
+                items.forEach(function (item) {
+                    var card = document.createElement('div');
+                    card.className = 'captionJob';
+                    card.style.setProperty('display', 'grid');
+                    card.style.setProperty('grid-template-columns', 'minmax(12em, 1fr) auto');
+                    card.style.setProperty('align-items', 'center');
+                    card.style.setProperty('gap', '.5em');
+                    card.style.setProperty('padding', '.65em 0');
+                    card.style.setProperty('margin-bottom', '0');
+                    card.style.setProperty('border-bottom', '1px solid #303030');
+                    var title = apiValue(item, 'name') || 'Unknown item';
+                    var itemType = apiValue(item, 'type');
+                    if (itemType === 'Season' && apiValue(item, 'indexNumber') != null) {
+                        title = 'Season ' + apiValue(item, 'indexNumber');
+                    }
+                    if (itemType === 'Episode') {
+                        title = 'E' + String(apiValue(item, 'indexNumber') || 0).padStart(2, '0') + ' — ' + title;
+                    }
+                    var titleNode = captionText(card, 'captionJobTitle', title);
+                    titleNode.style.setProperty('grid-column', '1');
+                    titleNode.style.setProperty('min-width', '0');
+                    if (itemType === 'Series' || itemType === 'Season') {
+                        var browse = function () {
+                            var nextTrail = (trail || []).slice();
+                            nextTrail.push({
+                                label: title,
+                                kind: kind,
+                                parentId: parentId || null,
+                                parentName: parentName || null,
+                                query: document.querySelector('#CaptionQueueSearch').value.trim(),
+                                trail: (trail || []).slice()
+                            });
+                            browseCaptionQueue(itemType === 'Series' ? 'seasons' : 'episodes', apiValue(item, 'id'), title, nextTrail);
+                        };
+                        card.setAttribute('role', 'button');
+                        card.tabIndex = 0;
+                        card.style.setProperty('cursor', 'pointer');
+                        card.title = itemType === 'Series' ? 'Open seasons' : 'Open episodes';
+                        card.addEventListener('click', browse);
+                        card.addEventListener('keydown', function (event) {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                browse();
+                            }
+                        });
+                    }
+                    var queueButton = document.createElement('button');
+                    queueButton.type = 'button';
+                    queueButton.className = 'raised emby-button';
+                    queueButton.textContent = itemType === 'Series' ? 'Queue All' : 'Queue';
+                    setDarkButton(queueButton, true);
+                    queueButton.style.setProperty('grid-column', '2');
+                    queueButton.style.setProperty('white-space', 'nowrap');
+                    queueButton.style.setProperty('min-height', '0');
+                    queueButton.style.setProperty('padding', '.35em .65em');
+                    queueButton.addEventListener('click', function (event) {
+                        event.stopPropagation();
+                        queueButton.disabled = true;
+                        queueCaptionItem(item, card).finally(function () { queueButton.disabled = false; });
+                    });
+                    card.appendChild(queueButton);
+                    resultsNode.appendChild(card);
+                });
+            }
+
+            function browseCaptionQueue(kind, parentId, parentName, trail) {
+                var parameters = { kind: kind, limit: kind === 'episodes' ? 500 : 100 };
+                if (parentId) {
+                    parameters.parentId = parentId;
+                } else {
+                    var query = document.querySelector('#CaptionQueueSearch').value.trim();
+                    if (!query) {
+                        document.querySelector('#CaptionQueueSearchResults').replaceChildren();
+                        return;
+                    }
+                    parameters.query = query;
+                }
+                ApiClient.getJSON(ApiClient.getUrl('AutoGenerateCaptions/Admin/Browse', parameters))
+                    .then(function (items) { renderCaptionBrowse(items, kind, parentName, parentId, trail || []); })
+                    .catch(function (error) {
+                        var resultsNode = document.querySelector('#CaptionQueueSearchResults');
+                        resultsNode.replaceChildren();
+                        captionText(resultsNode, 'captionEmpty captionError', 'Could not browse media: ' + (error.message || error));
+                    });
+            }
+
+            function searchCaptionQueue() {
+                var query = document.querySelector('#CaptionQueueSearch').value.trim();
+                if (!query) {
+                    return;
+                }
+                browseCaptionQueue(AutoGenerateCaptionsConfig.queueKind || 'series', null, null, []);
             }
 
             document.querySelector('#CaptionSettingsTab').addEventListener('click', function () { setCaptionTab('settings'); });
             document.querySelector('#CaptionProcessingTab').addEventListener('click', function () { setCaptionTab('processing'); });
+            document.querySelector('#CaptionQueueTab').addEventListener('click', function () { setCaptionTab('queue'); });
             document.querySelector('#CaptionProcessingRefresh').addEventListener('click', loadCaptionProcessing);
+            document.querySelector('#CaptionQueueRefresh').addEventListener('click', loadCaptionQueue);
+            document.querySelector('#CaptionQueueClearWaiting').addEventListener('click', function () { clearCaptionQueue('waiting'); });
+            document.querySelector('#CaptionQueueClearHistory').addEventListener('click', function () { clearCaptionQueue('history'); });
+            setDarkButton(document.querySelector('#CaptionQueueClearWaiting'), false);
+            setDarkButton(document.querySelector('#CaptionQueueClearHistory'), false);
+            document.querySelector('#CaptionQueueShows').addEventListener('click', function () { setCaptionQueueKind('series'); });
+            document.querySelector('#CaptionQueueMovies').addEventListener('click', function () { setCaptionQueueKind('movies'); });
+            document.querySelector('#CaptionQueueSearch').addEventListener('change', searchCaptionQueue);
+            document.querySelector('#CaptionQueueSearch').addEventListener('keyup', function (event) {
+                if (event.key === 'Enter') {
+                    searchCaptionQueue();
+                }
+            });
 
             document.querySelector('#AutoGenerateCaptionsConfigPage')
                 .addEventListener('pageshow', function() {
+                    setCaptionTab('settings');
+                    setCaptionQueueKind('series');
                     Dashboard.showLoadingMsg();
                     ApiClient.getPluginConfiguration(AutoGenerateCaptionsConfig.pluginUniqueId).then(function (config) {
                         document.querySelector('#FfmpegPath').value = config.FfmpegPath || '';
@@ -482,8 +901,13 @@
                         document.querySelector('#BackgroundSliceSeconds').value = config.BackgroundSliceSeconds || 300;
                         document.querySelector('#EnableBackgroundDiarization').checked = !!config.EnableBackgroundDiarization;
                         document.querySelector('#EnableOpenAiCaptionPolish').checked = !!config.EnableOpenAiCaptionPolish;
+                        document.querySelector('#CaptionPolishProvider').value = config.CaptionPolishProvider || 'OpenAI';
                         document.querySelector('#OpenAiApiKey').value = config.OpenAiApiKey || '';
                         document.querySelector('#OpenAiCaptionPolishModel').value = config.OpenAiCaptionPolishModel || 'gpt-5.4-mini';
+                        document.querySelector('#LocalCaptionPolishUrl').value = config.LocalCaptionPolishUrl || '';
+                        document.querySelector('#LocalCaptionPolishApiKey').value = config.LocalCaptionPolishApiKey || '';
+                        document.querySelector('#LocalCaptionPolishLiveModel').value = config.LocalCaptionPolishLiveModel || 'qwen3:4b';
+                        document.querySelector('#LocalCaptionPolishFullModel').value = config.LocalCaptionPolishFullModel || 'qwen3:8b';
                         document.querySelector('#OpenAiPolishLookaheadSeconds').value = config.OpenAiPolishLookaheadSeconds || 60;
                         document.querySelector('#OpenAiPolishWindowSeconds').value = config.OpenAiPolishWindowSeconds || 180;
                         document.querySelector('#OpenAiPolishGuardBandSeconds').value = configValue(config, 'OpenAiPolishGuardBandSeconds', 10);
@@ -544,8 +968,13 @@
                         config.BackgroundSliceSeconds = numberValue('#BackgroundSliceSeconds', '300');
                         config.EnableBackgroundDiarization = document.querySelector('#EnableBackgroundDiarization').checked;
                         config.EnableOpenAiCaptionPolish = document.querySelector('#EnableOpenAiCaptionPolish').checked;
+                        config.CaptionPolishProvider = document.querySelector('#CaptionPolishProvider').value;
                         config.OpenAiApiKey = document.querySelector('#OpenAiApiKey').value.trim();
                         config.OpenAiCaptionPolishModel = document.querySelector('#OpenAiCaptionPolishModel').value.trim() || 'gpt-5.4-mini';
+                        config.LocalCaptionPolishUrl = document.querySelector('#LocalCaptionPolishUrl').value.trim();
+                        config.LocalCaptionPolishApiKey = document.querySelector('#LocalCaptionPolishApiKey').value.trim();
+                        config.LocalCaptionPolishLiveModel = document.querySelector('#LocalCaptionPolishLiveModel').value.trim() || 'qwen3:4b';
+                        config.LocalCaptionPolishFullModel = document.querySelector('#LocalCaptionPolishFullModel').value.trim() || 'qwen3:8b';
                         config.OpenAiPolishLookaheadSeconds = numberValue('#OpenAiPolishLookaheadSeconds', '60');
                         config.OpenAiPolishWindowSeconds = numberValue('#OpenAiPolishWindowSeconds', '180');
                         config.OpenAiPolishGuardBandSeconds = numberValue('#OpenAiPolishGuardBandSeconds', '10');

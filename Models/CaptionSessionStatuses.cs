@@ -34,4 +34,9 @@ public static class CaptionSessionStatuses
     /// Session failed.
     /// </summary>
     public const string Failed = "failed";
+
+    /// <summary>
+    /// Session was intentionally not written because an existing subtitle sidecar was protected.
+    /// </summary>
+    public const string Skipped = "skipped";
 }

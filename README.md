@@ -2,7 +2,7 @@
 
 Experimental Jellyfin plugin for Roku-driven, on-demand AI caption generation.
 
-The plugin supports immediate rolling Live captions and an internal Full background pipeline used by Naqafin's Enhanced mode. Enhanced starts with Live captions, then switches to the completed speaker-labeled and polished VTT. It does not automatically scan the library or trigger work for Next Up items.
+The plugin supports immediate rolling Live captions plus a server-owned Enhanced queue for durable, full-item subtitles. The queue is administered from the plugin dashboard; it does not scan the library automatically, depend on Naqafin, or trigger work for Next Up items.
 
 ## Related Projects
 
@@ -39,7 +39,7 @@ The current implementation provides:
 - Explicit, low-priority full-item transcription through the remote worker.
 - Optional local worker diarization with WebVTT speaker voice tags.
 - Full-session status with real worker progress from 0-100%.
-- Atomic promotion of completed Full output as a normal `AI Generated (Enhanced)` external subtitle track backed by durable plugin-managed storage.
+- Atomic promotion of completed Full output to a Plex-compatible `.eng.vtt` sidecar beside the media file.
 - Durable `diarization-turns.json` diagnostics for Full jobs and an explicit polishing phase for clients.
 
 ## API Contract
@@ -127,6 +127,16 @@ GET /AutoGenerateCaptions/Admin/Jobs?limit=50
 
 The Processing tab polls this endpoint every three seconds. Its recent history is intentionally in-memory and resets when Jellyfin restarts.
 
+Search and queue server-owned Enhanced work for an elevated administrator:
+
+```http
+GET  /AutoGenerateCaptions/Admin/Search?query=Foundation
+POST /AutoGenerateCaptions/Admin/Queue/{itemId}?overwriteExistingSubtitle=false
+GET  /AutoGenerateCaptions/Admin/Queue?limit=100
+```
+
+Movies and episodes queue directly; seasons and series expand to their video children. Queue state is persisted below the plugin data directory and an interrupted running job is requeued after Jellyfin restarts. Set `overwriteExistingSubtitle=true` only when intentionally replacing an existing sidecar; it also bypasses completed cache output and retranscribes the item.
+
 Clear generated-caption cache for an item:
 
 ```http
@@ -146,13 +156,11 @@ In this workspace, the corresponding development checkout is usually at:
 Client behavior:
 
 1. Load the server plugin list and show generated-caption UI only when this plugin is available.
-2. Add `AI Captions - Live` and, when advertised by capabilities, `AI Captions - Enhanced` entries to the subtitle menu.
-3. For Enhanced, start Live and Full together, continue displaying Live while polling Full status, then switch to `enhancedVttUrl` when `enhancedReady` becomes true.
-4. Set the custom caption task URL to the returned `liveVttUrl`.
-5. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
-6. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
-7. Poll Full session status to show transcription progress, then `Live - Enhancing - Polishing` during OpenAI cleanup in Subtitle Tools.
-8. Call the stop endpoint when Live playback exits. Full jobs are background-owned and continue when playback pauses or exits.
+2. Add `AI Captions - Live` to the subtitle menu.
+3. Set the custom caption task URL to the returned `liveVttUrl`.
+4. Poll/reload VTT at `pollSeconds`, including current video `positionTicks`.
+5. Let Subtitle Tools change generated-caption language and OpenAI polish settings, then restart the session when needed.
+6. Call the stop endpoint when Live playback exits.
 
 ## Worker Design
 
@@ -162,12 +170,12 @@ The worker should:
 - Generate a small first chunk, then expand rolling windows while keeping a revisable tail.
 - Keep `LookaheadSeconds` generated ahead of playback.
 - Send earlier transcript text as Whisper context and reconcile repeated words at committed boundaries.
-- Submit user-requested Full transcriptions at background priority in resumable worker slices.
+- Submit administrator-queued Full transcriptions at background priority in resumable worker slices.
 - Diarize completed Full transcriptions locally on the worker when configured.
 - Reconcile only tightly bounded unlabeled fragments, then polish Full captions in immutable speaker groups; a rejected group keeps its original cues without blocking later groups.
 - Store generated ranges by `itemId + mediaSourceId + audioStreamIndex + language + model/config`.
 - Keep chunk caches for all models, but only write stitched cache output when the model is listed in `Promotable models`.
-- Atomically write successful Full output beneath Jellyfin's persistent data directory, register it immediately as an external `AI Generated (Enhanced)` subtitle track, and retain provenance alongside it.
+- Atomically write successful Full output beside its media as `<media-base>.eng.vtt`, register it as an external `AI Generated (Enhanced)` track, and retain provenance in the plugin cache. Existing sidecars are protected unless the queue request explicitly enables replacement.
 
 Relevant cache/promotion settings:
 
@@ -181,7 +189,11 @@ Relevant cue-shaping settings:
 - `Max cue words`: target maximum words per generated cue.
 - `Max cue duration seconds`: target maximum cue display duration.
 - `Regroup split gap seconds`: pause length that encourages splitting speech into separate cues.
-- `Polish generated captions with OpenAI`: optionally cleans buffered Live captions after enough lookahead exists and cleans Full captions after diarization. Caption generation does not require OpenAI, and failed Full groups retain their original cues.
+- `Polish generated captions`: optionally cleans buffered Live captions after enough lookahead exists and cleans Full captions after diarization. Caption generation does not require a cloud API, and failed groups retain their original cues.
+- `Caption polish provider`: choose `OpenAI`, `Local`, or `Disabled`. Existing installations remain on OpenAI until changed.
+- `Local polish URL`: an OpenAI-compatible `/v1/chat/completions` endpoint, such as Ollama. The plugin requests strict JSON-schema output and validates it before replacing any cue.
+- `Local Live polish model`: a compact model intended to share GPU memory with Whisper.
+- `Local Full polish model`: a larger model used by server-side Enhanced jobs only after other plugin transcription has become idle.
 - `OpenAI polish lookahead seconds`: minimum generated-caption buffer ahead of playback before polishing starts.
 - `OpenAI polish window seconds`: maximum caption span sent to OpenAI in one pass.
 
@@ -200,8 +212,8 @@ Relevant plugin settings:
 - `Remote worker API key`: optional bearer token for protected workers.
 - `Remote worker model`: model requested from the worker, for example `large-v3`.
 - `Fallback to local when unavailable`: uses the local resident/per-job worker if the remote worker cannot be reached before a job starts.
-- `Enable background prefetch`: enables explicit Full transcription requests. Despite the legacy configuration name, Naqafin does not automatically prefetch Next Up items.
-- `Diarize background captions`: adds speaker labels to Full transcriptions and advertises the Full mode to Naqafin.
+- `Enable server-side Enhanced queue`: enables administrator-queued Full transcription. It never automatically prefetches Next Up items.
+- `Diarize background captions`: adds speaker labels to Full transcriptions.
 
 Remote jobs that start and then fail are treated as generation failures. That avoids silently restarting a long failed remote job on the weaker Jellyfin server.
 

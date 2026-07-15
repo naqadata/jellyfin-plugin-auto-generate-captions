@@ -150,6 +150,54 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.3.zip",
         "checksum": "1ac354c86569f327669b20e742bd1cef",
         "timestamp": "2026-07-14T03:15:24Z"
+      },
+      {
+        "version": "0.4.4.0",
+        "changelog": "Add durable server-side Enhanced queue and Plex sidecar VTT output",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.4.zip",
+        "checksum": "5e707e96f2b914244ef0159631008be8",
+        "timestamp": "2026-07-14T18:03:23Z"
+      },
+      {
+        "version": "0.4.5.0",
+        "changelog": "Fix Enhanced queue tab colors in Jellyfin dark theme",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.5.zip",
+        "checksum": "f9279642efda19ab5ca4468b1cf320f4",
+        "timestamp": "2026-07-14T18:07:35Z"
+      },
+      {
+        "version": "0.4.6.0",
+        "changelog": "Add hierarchical Enhanced queue media selector and fix dashboard tabs",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.6.zip",
+        "checksum": "a3c02dbd6afc29c952fafa19b6f76297",
+        "timestamp": "2026-07-14T18:13:54Z"
+      },
+      {
+        "version": "0.4.7.0",
+        "changelog": "Fix dynamically created Enhanced queue button colors",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.7.zip",
+        "checksum": "09f11761009c83f5230ad9f752f25e8f",
+        "timestamp": "2026-07-14T18:30:02Z"
+      },
+      {
+        "version": "0.4.8.0",
+        "changelog": "Add selectable local Ollama caption polish with idle GPU Full queue",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.8.zip",
+        "checksum": "2fb24704730aeaf58ac602ee4c53acf3",
+        "timestamp": "2026-07-15T02:48:56Z"
+      },
+      {
+        "version": "0.4.9.0",
+        "changelog": "Release idle Whisper GPU memory before local Full caption polish",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.9.zip",
+        "checksum": "dd643828d908a2f372458d0f92c75202",
+        "timestamp": "2026-07-15T03:01:58Z"
       }
     ]
   }
