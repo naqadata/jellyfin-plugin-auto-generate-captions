@@ -227,6 +227,30 @@ public class AutoGenerateCaptionsController : ControllerBase
     }
 
     /// <summary>
+    /// Re-runs the configured full-caption polish on an item's cached captions without retranscribing it.
+    /// </summary>
+    /// <param name="itemId">Video item id.</param>
+    /// <returns>Background caption session details.</returns>
+    [HttpPost("Admin/Items/{itemId}/Polish")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<CaptionSessionDto> PolishCachedItem(Guid itemId)
+    {
+        if (_libraryManager.GetItemById(itemId) is not Video video)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            return Accepted(_captionService.StartCachedPolish(video));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { Error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Clears waiting jobs or terminal queue history.
     /// </summary>
     [HttpPost("Admin/Queue/Clear")]

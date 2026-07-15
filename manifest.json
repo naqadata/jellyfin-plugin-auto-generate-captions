@@ -206,6 +206,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.10.zip",
         "checksum": "d771de171069e52534f118d734258915",
         "timestamp": "2026-07-15T03:20:00Z"
+      },
+      {
+        "version": "0.4.11.0",
+        "changelog": "Add an admin-only cached caption polish rerun",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.11.zip",
+        "checksum": "b30b366b965c2951fd4ed42d5e52a6f8",
+        "timestamp": "2026-07-15T03:24:12Z"
       }
     ]
   }

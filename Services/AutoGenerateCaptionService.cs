@@ -254,6 +254,68 @@ public class AutoGenerateCaptionService
     }
 
     /// <summary>
+    /// Re-runs the configured full-caption polish from the latest complete cached captions for an item.
+    /// </summary>
+    /// <param name="video">Video item with a previously generated caption cache.</param>
+    /// <returns>Background polish session.</returns>
+    public CaptionSessionDto StartCachedPolish(Video video)
+    {
+        ArgumentNullException.ThrowIfNull(video);
+
+        PluginConfiguration config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        if (!config.EnableOpenAiCaptionPolish || !IsCaptionPolishConfigured(config))
+        {
+            throw new InvalidOperationException("Cached caption polish requires an enabled and configured caption polish provider.");
+        }
+
+        string cacheRoot = GetCacheRoot(config);
+        string? cacheDirectory = FindLatestCompleteCacheDirectory(cacheRoot, video.Id);
+        if (cacheDirectory is null)
+        {
+            throw new InvalidOperationException("No complete generated-caption cache is available for this item.");
+        }
+
+        var state = new CaptionSessionState
+        {
+            SessionId = Guid.NewGuid(),
+            ItemId = video.Id,
+            ItemName = GetDisplayName(video),
+            MediaPath = video.Path,
+            Language = config.DefaultLanguage,
+            EnableOpenAiPolish = true,
+            Status = CaptionSessionStatuses.WarmingUp,
+            PollSeconds = Math.Clamp(config.PollSeconds, 1, 30),
+            DurationTicks = video.RunTimeTicks,
+            IsPrefetch = true,
+            Mode = CaptionGenerationModes.Full,
+            IsDiarized = config.EnableBackgroundDiarization,
+            OverwriteExistingSubtitle = true,
+            CacheKey = Path.GetFileName(cacheDirectory),
+            Message = "Cached captions queued for polish only.",
+            ProcessingPhase = "queued"
+        };
+
+        string cacheKey = state.CacheKey;
+        if (_prefetchByCacheKey.TryGetValue(cacheKey, out Guid existingId)
+            && _sessions.TryGetValue(existingId, out CaptionSessionState? existing)
+            && IsActiveGenerationStatus(existing.Status))
+        {
+            return ToDto(existing);
+        }
+
+        _sessions[state.SessionId] = state;
+        _prefetchByCacheKey[cacheKey] = state.SessionId;
+        _logger.LogInformation(
+            "Queued cached caption polish {SessionId} for {ItemName}; provider={Provider}; cache={CacheDirectory}",
+            state.SessionId,
+            state.ItemName,
+            GetCaptionPolishProvider(config),
+            cacheDirectory);
+        _ = Task.Run(() => PolishCachedCaptionsAsync(state, config, cacheDirectory));
+        return ToDto(state);
+    }
+
+    /// <summary>
     /// Gets session status.
     /// </summary>
     /// <param name="sessionId">Session id.</param>
@@ -934,6 +996,89 @@ public class AutoGenerateCaptionService
             catch
             {
                 // Temporary cleanup is best-effort.
+            }
+        }
+    }
+
+    private async Task PolishCachedCaptionsAsync(
+        CaptionSessionState state,
+        PluginConfiguration config,
+        string persistentCacheDirectory)
+    {
+        state.StartedAt ??= DateTimeOffset.UtcNow;
+        try
+        {
+            state.Status = CaptionSessionStatuses.Generating;
+            state.ProgressPercent = 5;
+            state.ProcessingPhase = "loading-cache";
+            state.Message = "Loading cached diarized captions for polish.";
+            TryHydrateFromCombinedCache(state, config, persistentCacheDirectory);
+            if (!state.HasCachedCaptions || state.Cues.Count == 0)
+            {
+                throw new InvalidOperationException("The cached captions are empty or unavailable for polish.");
+            }
+
+            state.ProcessingPhase = "polishing";
+            state.ProgressPercent = 15;
+            state.Message = string.Create(CultureInfo.InvariantCulture, $"Polishing cached speaker-safe caption groups with {GetCaptionPolishProvider(config)}.");
+            if (IsLocalCaptionPolish(config))
+            {
+                await WaitForLocalPolishGpuAsync(state, config).ConfigureAwait(false);
+                await _remoteCaptionWorkerClient.ReleaseModelCacheIfIdleAsync(config, state.SessionId, state.Cancellation.Token).ConfigureAwait(false);
+            }
+
+            await PolishFullCaptionsWithOpenAiAsync(
+                state,
+                config,
+                persistentCacheDirectory,
+                config.RemoteWorkerModel).ConfigureAwait(false);
+
+            state.ProcessingPhase = "finalizing";
+            List<CaptionCue> completedCues;
+            lock (state.SyncRoot)
+            {
+                completedCues = state.Cues
+                    .OrderBy(i => i.StartTicks)
+                    .ThenBy(i => i.EndTicks)
+                    .ToList();
+            }
+
+            long endTicks = state.DurationTicks.GetValueOrDefault(completedCues.Max(i => i.EndTicks));
+            WriteChunkCache(state, persistentCacheDirectory, 0, 0, endTicks, completedCues);
+            await PromoteEnhancedSubtitleAsync(state, persistentCacheDirectory, config.RemoteWorkerModel).ConfigureAwait(false);
+
+            state.GeneratedThroughTicks = endTicks;
+            state.ProgressPercent = 100;
+            state.ProcessingPhase = "complete";
+            state.Status = CaptionSessionStatuses.Complete;
+            state.CompletedAt = DateTimeOffset.UtcNow;
+            state.Message = string.Create(CultureInfo.InvariantCulture, $"Cached caption polish complete with {completedCues.Count} cues.");
+            _logger.LogInformation(
+                "Auto-caption cached polish complete for session {SessionId}: item={ItemName}; cues={CueCount}; cache={CacheDirectory}",
+                state.SessionId,
+                state.ItemName,
+                completedCues.Count,
+                persistentCacheDirectory);
+        }
+        catch (OperationCanceledException)
+        {
+            state.Status = CaptionSessionStatuses.Stopped;
+            state.ProcessingPhase = "stopped";
+            state.Message = "Cached caption polish cancelled.";
+            state.StoppedAt = DateTimeOffset.UtcNow;
+            state.CompletedAt = state.StoppedAt;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Auto-caption cached polish failed for session {SessionId}", state.SessionId);
+            state.ProcessingPhase = "failed";
+            FailSession(state, ex.Message);
+        }
+        finally
+        {
+            if (state.CacheKey is not null)
+            {
+                _prefetchByCacheKey.TryRemove(new KeyValuePair<string, Guid>(state.CacheKey, state.SessionId));
             }
         }
     }
@@ -3097,6 +3242,27 @@ public class AutoGenerateCaptionService
         {
             return false;
         }
+    }
+
+    private static string? FindLatestCompleteCacheDirectory(string cacheRoot, Guid itemId)
+    {
+        string mediaCacheRoot = Path.Combine(cacheRoot, "media");
+        if (!Directory.Exists(mediaCacheRoot))
+        {
+            return null;
+        }
+
+        return Directory.EnumerateDirectories(mediaCacheRoot)
+            .Where(directory => IsCacheDirectoryForItem(directory, itemId))
+            .Where(directory => File.Exists(GetCombinedVttPath(directory)))
+            .Select(directory => new
+            {
+                Directory = directory,
+                LastWriteUtc = File.GetLastWriteTimeUtc(GetCombinedVttPath(directory))
+            })
+            .OrderByDescending(candidate => candidate.LastWriteUtc)
+            .Select(candidate => candidate.Directory)
+            .FirstOrDefault();
     }
 
     private static string GetPersistentCacheDirectory(CaptionSessionState state, PluginConfiguration config, string cacheRoot)
