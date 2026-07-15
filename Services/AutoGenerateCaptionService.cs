@@ -46,7 +46,10 @@ public class AutoGenerateCaptionService
     private readonly ResidentWhisperWorker _residentWhisperWorker;
     private readonly RemoteCaptionWorkerClient _remoteCaptionWorkerClient;
     private readonly ILogger<AutoGenerateCaptionService> _logger;
-    private readonly HttpClient _captionPolishHttpClient = new();
+    private readonly HttpClient _captionPolishHttpClient = new()
+    {
+        Timeout = TimeSpan.FromMinutes(5)
+    };
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutoGenerateCaptionService"/> class.

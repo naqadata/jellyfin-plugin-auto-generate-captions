@@ -222,6 +222,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.12.zip",
         "checksum": "f4d7fa98e5b11b2ec6d77e374d607d38",
         "timestamp": "2026-07-15T03:29:49Z"
+      },
+      {
+        "version": "0.4.13.0",
+        "changelog": "Allow local caption polish requests up to five minutes",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.13.zip",
+        "checksum": "037cfb60df8a7fca543a72a8a62b73da",
+        "timestamp": "2026-07-15T03:36:13Z"
       }
     ]
   }
