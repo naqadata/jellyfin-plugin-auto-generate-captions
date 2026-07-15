@@ -1706,6 +1706,14 @@ public class AutoGenerateCaptionService
                 Dictionary<string, OpenAiSpeakerPolishGroup> returnedGroups = response.Groups
                     .GroupBy(i => i.GroupId, StringComparer.Ordinal)
                     .ToDictionary(i => i.Key, i => i.First(), StringComparer.Ordinal);
+                _logger.LogInformation(
+                    "Auto-caption Full {Provider} polish returned speaker groups for session {SessionId}: batch={Batch}; expected={ExpectedGroupCount}; returned={ReturnedGroupCount}; groupIds={GroupIds}",
+                    GetCaptionPolishProvider(config),
+                    state.SessionId,
+                    batchIndex,
+                    batch.Count,
+                    returnedGroups.Count,
+                    string.Join(',', returnedGroups.Keys));
 
                 foreach (SpeakerPolishGroup group in batch)
                 {
@@ -2788,6 +2796,10 @@ public class AutoGenerateCaptionService
             stream = false,
             think = false,
             max_tokens = 4096,
+            options = new
+            {
+                num_ctx = 8192
+            },
             response_format = new
             {
                 type = "json_schema",
