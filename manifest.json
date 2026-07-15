@@ -254,6 +254,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.16.zip",
         "checksum": "555a595a477ad91c27e963e79a9222fb",
         "timestamp": "2026-07-15T18:23:31Z"
+      },
+      {
+        "version": "0.4.17.0",
+        "changelog": "Restore established OpenAI caption polish batching and context",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.17.zip",
+        "checksum": "67f41ccbb0c0fba70bf86d387239b7ff",
+        "timestamp": "2026-07-15T18:39:35Z"
       }
     ]
   }

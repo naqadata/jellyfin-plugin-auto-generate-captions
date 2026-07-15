@@ -29,9 +29,11 @@ public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
     private const int GenerationPipelineVersion = 26;
-    private const int FullPolishBatchCueCount = 320;
+    // Keep the established OpenAI request shape independent from the smaller
+    // local-model batches.  Larger batches noticeably reduce OpenAI's ability
+    // to reflow cue boundaries coherently.
+    private const int OpenAiFullPolishBatchCueCount = 80;
     private const int LocalFullPolishBatchCueCount = 32;
-    private const int FullPolishContextSeconds = 60;
     private const string EnhancedSubtitleTitle = "AI Generated";
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -1716,7 +1718,7 @@ public class AutoGenerateCaptionService
 
         int maximumCuesPerBatch = IsLocalCaptionPolish(config)
             ? LocalFullPolishBatchCueCount
-            : FullPolishBatchCueCount;
+            : OpenAiFullPolishBatchCueCount;
         List<List<SpeakerPolishGroup>> batches = BuildSpeakerPolishBatches(sourceCues, maximumCuesPerBatch);
         int appliedGroups = 0;
         int rejectedGroups = 0;
@@ -1846,7 +1848,7 @@ public class AutoGenerateCaptionService
         int maxCueWords = Math.Clamp(Math.Max(config.MaxCueWords, 12), 3, 40);
         long batchStartTicks = groups.Min(i => i.StartTicks);
         long batchEndTicks = groups.Max(i => i.EndTicks);
-        long contextWindowTicks = TimeSpan.FromSeconds(FullPolishContextSeconds).Ticks;
+        long contextWindowTicks = TimeSpan.FromSeconds(Math.Clamp(config.OpenAiPolishWindowSeconds, 30, 1800)).Ticks;
         List<CaptionCue> contextBefore = allCues
             .Where(i => i.EndTicks <= batchStartTicks && i.EndTicks >= batchStartTicks - contextWindowTicks)
             .OrderBy(i => i.StartTicks)
