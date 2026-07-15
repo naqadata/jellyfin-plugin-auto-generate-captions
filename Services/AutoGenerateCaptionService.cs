@@ -1723,6 +1723,10 @@ public class AutoGenerateCaptionService
         int appliedCues = 0;
         foreach ((List<SpeakerPolishGroup> batch, int batchIndex) in batches.Select((value, index) => (value, index)))
         {
+            state.ProgressPercent = (int)Math.Floor(100d * batchIndex / batches.Count);
+            state.Message = string.Create(
+                CultureInfo.InvariantCulture,
+                $"Polishing captions with {GetCaptionPolishProvider(config)}: batch {batchIndex + 1} of {batches.Count}.");
             try
             {
                 OpenAiSpeakerGroupPolishResponse response = await PolishSpeakerGroupsWithOpenAiAsync(
@@ -1816,6 +1820,11 @@ public class AutoGenerateCaptionService
                     batch.Count,
                     batch.Sum(i => i.Cues.Count));
             }
+
+            state.ProgressPercent = (int)Math.Floor(100d * (batchIndex + 1) / batches.Count);
+            state.Message = string.Create(
+                CultureInfo.InvariantCulture,
+                $"Polishing captions with {GetCaptionPolishProvider(config)}: batch {batchIndex + 1} of {batches.Count} complete.");
         }
 
         _logger.LogInformation(

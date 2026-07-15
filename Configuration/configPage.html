@@ -465,7 +465,7 @@
                     return status;
                 }
                 if (processingPhase === 'polishing') {
-                    return 'Polishing';
+                    return 'Polishing ' + progressPercent + '%';
                 }
                 if (workerState === 'queued') {
                     return progressPercent > 0 ? (mode === 'full' ? 'Transcribing / diarizing' : 'Transcribing') : 'Queued on worker';
@@ -510,7 +510,7 @@
                     if (includeProgress) {
                         var progressCell = document.createElement('div');
                         progressCell.style.setProperty('min-width', '6em');
-                        captionText(progressCell, 'captionJobStatus', apiValue(job, 'processingPhase') === 'polishing' ? 'Polishing' : progressPercent + '%');
+                        captionText(progressCell, 'captionJobStatus', apiValue(job, 'processingPhase') === 'polishing' ? 'Polishing ' + progressPercent + '%' : progressPercent + '%');
                         var progress = document.createElement('div');
                         progress.className = 'captionProgress';
                         progress.style.setProperty('margin-top', '.25em');
@@ -579,10 +579,14 @@
 
                 var running = jobs.filter(function (job) { return apiValue(job, 'status') === 'running'; });
                 var polishing = jobs.filter(function (job) { return apiValue(job, 'status') === 'polishing'; });
+                var pendingPolish = jobs.filter(function (job) { return apiValue(job, 'status') === 'pending-polish'; });
                 var queued = jobs.filter(function (job) { return apiValue(job, 'status') === 'queued'; });
                 captionText(summaryNode, '', running.length + ' running');
                 if (polishing.length > 0) {
                     captionText(summaryNode, '', polishing.length + ' polishing');
+                }
+                if (pendingPolish.length > 0) {
+                    captionText(summaryNode, '', pendingPolish.length + ' awaiting polish');
                 }
                 captionText(summaryNode, '', queued.length + ' waiting');
 
@@ -602,8 +606,19 @@
                     progressCell.style.setProperty('min-width', '7em');
                     if (status === 'queued') {
                         captionText(progressCell, 'captionJobStatus', 'Queued');
+                    } else if (status === 'pending-polish') {
+                        captionText(progressCell, 'captionJobStatus', 'Awaiting polish');
                     } else if (status === 'polishing' || (status === 'running' && processingPhase === 'polishing')) {
-                        captionText(progressCell, 'captionJobStatus', 'Polishing');
+                        var polishingLabel = captionText(progressCell, 'captionJobStatus', 'Polishing ' + progressPercent + '%');
+                        polishingLabel.style.setProperty('display', 'block');
+                        var polishingProgress = document.createElement('div');
+                        polishingProgress.className = 'captionProgress';
+                        polishingProgress.style.setProperty('margin-top', '.25em');
+                        var polishingProgressValue = document.createElement('div');
+                        polishingProgressValue.className = 'captionProgressValue';
+                        polishingProgressValue.style.width = progressPercent + '%';
+                        polishingProgress.appendChild(polishingProgressValue);
+                        progressCell.appendChild(polishingProgress);
                     } else if (status === 'running') {
                         var progressLabel = captionText(progressCell, 'captionJobStatus', progressPercent + '%');
                         progressLabel.style.setProperty('display', 'block');
@@ -621,7 +636,7 @@
                     progressCell.title = apiValue(job, 'message') || '';
                     card.appendChild(progressCell);
                     var action = null;
-                    if (status === 'queued' || status === 'running' || status === 'polishing') {
+                    if (status === 'queued' || status === 'running' || status === 'polishing' || status === 'pending-polish') {
                         action = document.createElement('button');
                         action.textContent = status === 'queued' ? 'Remove' : 'Cancel';
                         action.addEventListener('click', function () { manageCaptionQueueJob(apiValue(job, 'id'), 'Cancel'); });
@@ -642,6 +657,7 @@
 
                 running.forEach(function (job) { renderQueueRow(job, jobsNode); });
                 polishing.forEach(function (job) { renderQueueRow(job, jobsNode); });
+                pendingPolish.forEach(function (job) { renderQueueRow(job, jobsNode); });
                 if (queued.length > 0) {
                     var waitingDetails = document.createElement('details');
                     waitingDetails.id = 'CaptionQueueWaiting';
