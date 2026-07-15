@@ -28,8 +28,9 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 25;
+    private const int GenerationPipelineVersion = 26;
     private const int FullPolishBatchCueCount = 320;
+    private const int LocalFullPolishBatchCueCount = 32;
     private const int FullPolishContextSeconds = 60;
     private const string EnhancedSubtitleTitle = "AI Generated";
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
@@ -1540,7 +1541,10 @@ public class AutoGenerateCaptionService
                 .ToList();
         }
 
-        List<List<SpeakerPolishGroup>> batches = BuildSpeakerPolishBatches(sourceCues, FullPolishBatchCueCount);
+        int maximumCuesPerBatch = IsLocalCaptionPolish(config)
+            ? LocalFullPolishBatchCueCount
+            : FullPolishBatchCueCount;
+        List<List<SpeakerPolishGroup>> batches = BuildSpeakerPolishBatches(sourceCues, maximumCuesPerBatch);
         int appliedGroups = 0;
         int rejectedGroups = 0;
         int appliedCues = 0;
@@ -1661,6 +1665,11 @@ public class AutoGenerateCaptionService
             .Where(i => i.StartTicks >= batchEndTicks && i.StartTicks <= batchEndTicks + contextWindowTicks)
             .OrderBy(i => i.StartTicks)
             .ToList();
+        if (IsLocalCaptionPolish(config))
+        {
+            contextBefore = contextBefore.TakeLast(4).ToList();
+            contextAfter = contextAfter.Take(4).ToList();
+        }
         string inputJson = JsonSerializer.Serialize(new
         {
             context_before = contextBefore.Select(ToOpenAiCue),
@@ -2632,6 +2641,8 @@ public class AutoGenerateCaptionService
             },
             temperature = 0,
             stream = false,
+            think = false,
+            max_tokens = 4096,
             response_format = new
             {
                 type = "json_schema",

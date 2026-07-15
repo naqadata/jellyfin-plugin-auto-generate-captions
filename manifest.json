@@ -198,6 +198,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.9.zip",
         "checksum": "dd643828d908a2f372458d0f92c75202",
         "timestamp": "2026-07-15T03:01:58Z"
+      },
+      {
+        "version": "0.4.10.0",
+        "changelog": "Use compact local Full-polish batches with bounded context",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.10.zip",
+        "checksum": "d771de171069e52534f118d734258915",
+        "timestamp": "2026-07-15T03:20:00Z"
       }
     ]
   }
