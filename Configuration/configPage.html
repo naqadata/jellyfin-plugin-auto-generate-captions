@@ -849,19 +849,27 @@
                         });
                     }
                     var queueButton = document.createElement('button');
+                    var itemAlreadyQueued = apiValue(item, 'isQueued') === true;
                     queueButton.type = 'button';
                     queueButton.className = 'raised emby-button';
-                    queueButton.textContent = itemType === 'Series' ? 'Queue All' : 'Queue';
-                    setDarkButton(queueButton, true);
+                    queueButton.textContent = itemAlreadyQueued ? 'Already Queued' : itemType === 'Series' ? 'Queue All' : 'Queue';
+                    queueButton.disabled = itemAlreadyQueued;
+                    setDarkButton(queueButton, !itemAlreadyQueued);
+                    if (itemAlreadyQueued) {
+                        queueButton.style.setProperty('opacity', '.7');
+                        queueButton.title = 'This item already has active Enhanced queue work.';
+                    }
                     queueButton.style.setProperty('grid-column', '2');
                     queueButton.style.setProperty('white-space', 'nowrap');
                     queueButton.style.setProperty('min-height', '0');
                     queueButton.style.setProperty('padding', '.35em .65em');
-                    queueButton.addEventListener('click', function (event) {
-                        event.stopPropagation();
-                        queueButton.disabled = true;
-                        queueCaptionItem(item, card).finally(function () { queueButton.disabled = false; });
-                    });
+                    if (!itemAlreadyQueued) {
+                        queueButton.addEventListener('click', function (event) {
+                            event.stopPropagation();
+                            queueButton.disabled = true;
+                            queueCaptionItem(item, card).finally(function () { queueButton.disabled = false; });
+                        });
+                    }
                     var actions = document.createElement('div');
                     actions.style.setProperty('grid-column', '2');
                     actions.style.setProperty('display', 'flex');

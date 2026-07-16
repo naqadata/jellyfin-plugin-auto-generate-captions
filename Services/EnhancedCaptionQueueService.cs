@@ -58,6 +58,20 @@ public class EnhancedCaptionQueueService : BackgroundService
     }
 
     /// <summary>
+    /// Gets item ids that currently have non-terminal Enhanced queue work.
+    /// </summary>
+    public IReadOnlySet<Guid> GetActiveItemIds()
+    {
+        lock (_syncRoot)
+        {
+            return _jobs
+                .Where(i => i.Status is "queued" or "running" or "polishing" or "pending-polish")
+                .Select(i => i.ItemId)
+                .ToHashSet();
+        }
+    }
+
+    /// <summary>
     /// Expands a movie, episode, season, or series into durable video jobs.
     /// </summary>
     public IReadOnlyList<CaptionQueueJobDto> Enqueue(BaseItem selected, bool overwriteExistingSubtitle)

@@ -22,4 +22,7 @@ public class CaptionBrowseItemDto
 
     /// <summary>Gets or sets a value indicating whether a WebVTT sidecar already exists beside this media file.</summary>
     public bool HasVttSidecar { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether this item is already active in the Enhanced queue.</summary>
+    public bool IsQueued { get; set; }
 }

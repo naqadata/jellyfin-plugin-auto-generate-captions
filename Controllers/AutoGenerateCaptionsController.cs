@@ -194,6 +194,7 @@ public class AutoGenerateCaptionsController : ControllerBase
             return BadRequest(new { Error = "kind must be series, movies, seasons, or episodes." });
         }
 
+        IReadOnlySet<Guid> activeQueueItemIds = _enhancedQueueService.GetActiveItemIds();
         return Ok(items
             .OrderBy(i => i.ParentIndexNumber ?? int.MaxValue)
             .ThenBy(i => i.IndexNumber ?? int.MaxValue)
@@ -205,7 +206,8 @@ public class AutoGenerateCaptionsController : ControllerBase
                 Type = i.GetType().Name,
                 ParentIndexNumber = i.ParentIndexNumber,
                 IndexNumber = i.IndexNumber,
-                HasVttSidecar = HasVttSidecar(i)
+                HasVttSidecar = HasVttSidecar(i),
+                IsQueued = activeQueueItemIds.Contains(i.Id)
             })
             .ToArray());
     }

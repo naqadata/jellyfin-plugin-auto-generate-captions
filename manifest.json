@@ -310,6 +310,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.23.zip",
         "checksum": "130be34cfaf8cba80a8114effc357d88",
         "timestamp": "2026-07-16T02:59:13Z"
+      },
+      {
+        "version": "0.4.24.0",
+        "changelog": "Show active Enhanced queue state in browser",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.24.zip",
+        "checksum": "b9b49c5519a2b4e28b162e32a9d40406",
+        "timestamp": "2026-07-16T03:01:52Z"
       }
     ]
   }
