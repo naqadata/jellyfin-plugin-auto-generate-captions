@@ -30,7 +30,7 @@
         .captionJobStatus { white-space: nowrap; text-transform: capitalize; }
         .captionJobMeta { display: flex; flex-wrap: wrap; gap: .35em 1em; margin-top: .45em; opacity: .8; font-size: .9em; }
         .captionJobMessage { margin-top: .55em; }
-        .captionSidecarBadge { display: inline-block; margin-left: .6em; padding: .12em .45em; border-radius: 1em; color: #8de1a5; background: rgba(75, 180, 105, .16); font-size: .75em; font-weight: 600; vertical-align: middle; }
+        .captionSidecarBadge { display: inline-block; padding: .35em .65em; border: 1px solid rgba(89, 201, 120, .75); border-radius: 1em; color: #b5f2c5; background: rgba(56, 150, 82, .32); font-size: .8em; font-weight: 600; white-space: nowrap; }
         .captionProgress { height: .35em; overflow: hidden; margin-top: .8em; border-radius: .2em; background: rgba(128, 128, 128, .25); }
         .captionProgressValue { height: 100%; background: #00a4dc; }
         .captionEmpty { padding: 2em 1em; text-align: center; opacity: .75; }
@@ -793,13 +793,6 @@
                     var titleNode = captionText(card, 'captionJobTitle', title);
                     titleNode.style.setProperty('grid-column', '1');
                     titleNode.style.setProperty('min-width', '0');
-                    if (apiValue(item, 'hasVttSidecar') === true) {
-                        var sidecarBadge = document.createElement('span');
-                        sidecarBadge.className = 'captionSidecarBadge';
-                        sidecarBadge.textContent = 'VTT sidecar';
-                        sidecarBadge.title = 'A .vtt subtitle sidecar already exists beside this media file.';
-                        titleNode.appendChild(sidecarBadge);
-                    }
                     if (itemType === 'Series' || itemType === 'Season') {
                         var browse = function () {
                             var nextTrail = (trail || []).slice();
@@ -839,7 +832,20 @@
                         queueButton.disabled = true;
                         queueCaptionItem(item, card).finally(function () { queueButton.disabled = false; });
                     });
-                    card.appendChild(queueButton);
+                    var actions = document.createElement('div');
+                    actions.style.setProperty('grid-column', '2');
+                    actions.style.setProperty('display', 'flex');
+                    actions.style.setProperty('align-items', 'center');
+                    actions.style.setProperty('gap', '.5em');
+                    if (apiValue(item, 'hasVttSidecar') === true) {
+                        var sidecarBadge = document.createElement('span');
+                        sidecarBadge.className = 'captionSidecarBadge';
+                        sidecarBadge.textContent = 'VTT sidecar';
+                        sidecarBadge.title = 'A .vtt subtitle sidecar already exists beside this media file.';
+                        actions.appendChild(sidecarBadge);
+                    }
+                    actions.appendChild(queueButton);
+                    card.appendChild(actions);
                     resultsNode.appendChild(card);
                 });
             }

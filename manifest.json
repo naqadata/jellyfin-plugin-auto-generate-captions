@@ -270,6 +270,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.18.zip",
         "checksum": "c2bcd7e09915f1843052335aec60968a",
         "timestamp": "2026-07-16T02:45:48Z"
+      },
+      {
+        "version": "0.4.19.0",
+        "changelog": "Place VTT sidecar badge beside queue action",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.19.zip",
+        "checksum": "d0e6a1ff305a424a01b07f0a1adf94f6",
+        "timestamp": "2026-07-16T02:48:03Z"
       }
     ]
   }
