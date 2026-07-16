@@ -253,26 +253,29 @@
                             <div class="fieldDescription">Use a larger 7–8B 4-bit model. Enhanced jobs wait for other plugin transcription to become idle before using it.</div>
                         </div>
                     </section>
+                    <section id="SharedPolishSettings" class="captionProviderSettings" aria-label="Shared caption polish settings">
+                        <h3>Shared polish behavior</h3>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishLookaheadSeconds">OpenAI polish lookahead seconds</label>
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishLookaheadSeconds">Polish lookahead seconds</label>
                         <input id="OpenAiPolishLookaheadSeconds" name="OpenAiPolishLookaheadSeconds" type="number" is="emby-input" min="15" max="600" />
-                        <div class="fieldDescription">Minimum generated-caption buffer ahead of playback before polishing starts.</div>
+                        <div class="fieldDescription">Minimum generated-caption buffer ahead of playback before Live polishing starts, for either provider.</div>
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishWindowSeconds">OpenAI polish window seconds</label>
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishWindowSeconds">Polish context window seconds</label>
                         <input id="OpenAiPolishWindowSeconds" name="OpenAiPolishWindowSeconds" type="number" is="emby-input" min="30" max="1800" />
-                        <div class="fieldDescription">Read-only context span supplied before and after each editable polishing window.</div>
+                        <div class="fieldDescription">Read-only context supplied before and after each editable polishing window.</div>
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishGuardBandSeconds">OpenAI polish guard band seconds</label>
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishGuardBandSeconds">Polish guard band seconds</label>
                         <input id="OpenAiPolishGuardBandSeconds" name="OpenAiPolishGuardBandSeconds" type="number" is="emby-input" min="0" max="60" />
                         <div class="fieldDescription">Minimum distance ahead of playback before a cue can be replaced by polished text.</div>
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishCueCount">OpenAI polish cue count</label>
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishCueCount">Live polish cue count</label>
                         <input id="OpenAiPolishCueCount" name="OpenAiPolishCueCount" type="number" is="emby-input" min="2" max="80" />
                         <div class="fieldDescription">Target number of future-safe cues to send in one polishing pass.</div>
                     </div>
+                    </section>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PollSeconds">Client poll seconds</label>
                         <input id="PollSeconds" name="PollSeconds" type="number" is="emby-input" min="1" max="30" />
@@ -424,8 +427,21 @@
 
             function updateCaptionPolishProviderSettings() {
                 var provider = document.querySelector('#CaptionPolishProvider').value;
-                document.querySelector('#OpenAiPolishSettings').style.display = provider === 'OpenAI' ? '' : 'none';
-                document.querySelector('#LocalPolishSettings').style.display = provider === 'Local' ? '' : 'none';
+                var openAiSettings = document.querySelector('#OpenAiPolishSettings');
+                var localSettings = document.querySelector('#LocalPolishSettings');
+                openAiSettings.style.display = provider === 'OpenAI' ? '' : 'none';
+                localSettings.style.display = provider === 'Local' ? '' : 'none';
+                ['#OpenAiPolishSettings', '#LocalPolishSettings', '#SharedPolishSettings'].forEach(function (selector) {
+                    var group = document.querySelector(selector);
+                    group.style.setProperty('margin', '1em 0', 'important');
+                    group.style.setProperty('padding', '1em', 'important');
+                    group.style.setProperty('border', '1px solid #4b5960', 'important');
+                    group.style.setProperty('border-radius', '.45em', 'important');
+                    group.style.setProperty('background-color', '#1d2529', 'important');
+                    var heading = group.querySelector('h3');
+                    heading.style.setProperty('margin', '0 0 .8em', 'important');
+                    heading.style.setProperty('color', '#d9eff5', 'important');
+                });
             }
 
             function setDarkButton(button, active) {

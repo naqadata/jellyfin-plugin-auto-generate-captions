@@ -294,6 +294,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.21.zip",
         "checksum": "d0c0251bb3df3f1a8bc8181b47456b1b",
         "timestamp": "2026-07-16T02:53:49Z"
+      },
+      {
+        "version": "0.4.22.0",
+        "changelog": "Clarify shared caption polish controls",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.22.zip",
+        "checksum": "26c0d7602d2dc63c3d16a23f4f602092",
+        "timestamp": "2026-07-16T02:56:07Z"
       }
     ]
   }
