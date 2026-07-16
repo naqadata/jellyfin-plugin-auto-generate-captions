@@ -842,6 +842,15 @@
                         sidecarBadge.className = 'captionSidecarBadge';
                         sidecarBadge.textContent = 'VTT sidecar';
                         sidecarBadge.title = 'A .vtt subtitle sidecar already exists beside this media file.';
+                        sidecarBadge.style.setProperty('display', 'inline-block', 'important');
+                        sidecarBadge.style.setProperty('padding', '.35em .65em', 'important');
+                        sidecarBadge.style.setProperty('border', '1px solid #59c978', 'important');
+                        sidecarBadge.style.setProperty('border-radius', '999px', 'important');
+                        sidecarBadge.style.setProperty('color', '#b5f2c5', 'important');
+                        sidecarBadge.style.setProperty('background-color', '#1d6132', 'important');
+                        sidecarBadge.style.setProperty('font-size', '.8em', 'important');
+                        sidecarBadge.style.setProperty('font-weight', '600', 'important');
+                        sidecarBadge.style.setProperty('line-height', '1.2', 'important');
                         actions.appendChild(sidecarBadge);
                     }
                     actions.appendChild(queueButton);
