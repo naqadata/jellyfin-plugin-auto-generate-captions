@@ -31,6 +31,8 @@
         .captionJobMeta { display: flex; flex-wrap: wrap; gap: .35em 1em; margin-top: .45em; opacity: .8; font-size: .9em; }
         .captionJobMessage { margin-top: .55em; }
         .captionSidecarBadge { display: inline-block; padding: .35em .65em; border: 1px solid rgba(89, 201, 120, .75); border-radius: 1em; color: #b5f2c5; background: rgba(56, 150, 82, .32); font-size: .8em; font-weight: 600; white-space: nowrap; }
+        .captionProviderSettings { margin: 1em 0; padding: 1em; border: 1px solid rgba(128, 128, 128, .45); border-radius: .45em; background: rgba(128, 128, 128, .08); }
+        .captionProviderSettings h3 { margin: 0 0 .8em; font-size: 1em; }
         .captionProgress { height: .35em; overflow: hidden; margin-top: .8em; border-radius: .2em; background: rgba(128, 128, 128, .25); }
         .captionProgressValue { height: 100%; background: #00a4dc; }
         .captionEmpty { padding: 2em 1em; text-align: center; opacity: .75; }
@@ -215,36 +217,42 @@
                         </select>
                         <div class="fieldDescription">Local uses an OpenAI-compatible <code>/v1/chat/completions</code> endpoint with strict JSON output.</div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API key</label>
-                        <input id="OpenAiApiKey" name="OpenAiApiKey" type="password" is="emby-input" />
-                        <div class="fieldDescription">Only used when caption polish is enabled. Caption generation continues without it or when a polish group fails.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="OpenAiCaptionPolishModel">OpenAI polish model</label>
-                        <input id="OpenAiCaptionPolishModel" name="OpenAiCaptionPolishModel" type="text" is="emby-input" />
-                        <div class="fieldDescription">Model used for buffered caption cleanup.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishUrl">Local polish URL</label>
-                        <input id="LocalCaptionPolishUrl" name="LocalCaptionPolishUrl" type="url" is="emby-input" placeholder="http://llm-host:11434/v1/chat/completions" />
-                        <div class="fieldDescription">Ollama's OpenAI-compatible endpoint, or another compatible local server. Keep it on your private network.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishApiKey">Local polish API key</label>
-                        <input id="LocalCaptionPolishApiKey" name="LocalCaptionPolishApiKey" type="password" is="emby-input" />
-                        <div class="fieldDescription">Optional bearer token for a protected local endpoint.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishLiveModel">Local Live polish model</label>
-                        <input id="LocalCaptionPolishLiveModel" name="LocalCaptionPolishLiveModel" type="text" is="emby-input" />
-                        <div class="fieldDescription">Use a compact 3–4B 4-bit model so Live polish can coexist with Whisper.</div>
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishFullModel">Local Full polish model</label>
-                        <input id="LocalCaptionPolishFullModel" name="LocalCaptionPolishFullModel" type="text" is="emby-input" />
-                        <div class="fieldDescription">Use a larger 7–8B 4-bit model. Enhanced jobs wait for other plugin transcription to become idle before using it.</div>
-                    </div>
+                    <section id="OpenAiPolishSettings" class="captionProviderSettings" aria-label="OpenAI polish settings">
+                        <h3>OpenAI settings</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="OpenAiApiKey">OpenAI API key</label>
+                            <input id="OpenAiApiKey" name="OpenAiApiKey" type="password" is="emby-input" />
+                            <div class="fieldDescription">Only used when caption polish is enabled. Caption generation continues without it or when a polish group fails.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="OpenAiCaptionPolishModel">OpenAI polish model</label>
+                            <input id="OpenAiCaptionPolishModel" name="OpenAiCaptionPolishModel" type="text" is="emby-input" />
+                            <div class="fieldDescription">Model used for buffered caption cleanup.</div>
+                        </div>
+                    </section>
+                    <section id="LocalPolishSettings" class="captionProviderSettings" aria-label="Local polish settings">
+                        <h3>Local settings</h3>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishUrl">Local polish URL</label>
+                            <input id="LocalCaptionPolishUrl" name="LocalCaptionPolishUrl" type="url" is="emby-input" placeholder="http://llm-host:11434/v1/chat/completions" />
+                            <div class="fieldDescription">Ollama's OpenAI-compatible endpoint, or another compatible local server. Keep it on your private network.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishApiKey">Local polish API key</label>
+                            <input id="LocalCaptionPolishApiKey" name="LocalCaptionPolishApiKey" type="password" is="emby-input" />
+                            <div class="fieldDescription">Optional bearer token for a protected local endpoint.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishLiveModel">Local Live polish model</label>
+                            <input id="LocalCaptionPolishLiveModel" name="LocalCaptionPolishLiveModel" type="text" is="emby-input" />
+                            <div class="fieldDescription">Use a compact 3–4B 4-bit model so Live polish can coexist with Whisper.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="LocalCaptionPolishFullModel">Local Full polish model</label>
+                            <input id="LocalCaptionPolishFullModel" name="LocalCaptionPolishFullModel" type="text" is="emby-input" />
+                            <div class="fieldDescription">Use a larger 7–8B 4-bit model. Enhanced jobs wait for other plugin transcription to become idle before using it.</div>
+                        </div>
+                    </section>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="OpenAiPolishLookaheadSeconds">OpenAI polish lookahead seconds</label>
                         <input id="OpenAiPolishLookaheadSeconds" name="OpenAiPolishLookaheadSeconds" type="number" is="emby-input" min="15" max="600" />
@@ -412,6 +420,12 @@
                 }
                 var pascalName = name.charAt(0).toUpperCase() + name.substring(1);
                 return value[pascalName];
+            }
+
+            function updateCaptionPolishProviderSettings() {
+                var provider = document.querySelector('#CaptionPolishProvider').value;
+                document.querySelector('#OpenAiPolishSettings').style.display = provider === 'OpenAI' ? '' : 'none';
+                document.querySelector('#LocalPolishSettings').style.display = provider === 'Local' ? '' : 'none';
             }
 
             function setDarkButton(button, active) {
@@ -905,6 +919,7 @@
                     searchCaptionQueue();
                 }
             });
+            document.querySelector('#CaptionPolishProvider').addEventListener('change', updateCaptionPolishProviderSettings);
 
             document.querySelector('#AutoGenerateCaptionsConfigPage')
                 .addEventListener('pageshow', function() {
@@ -963,6 +978,7 @@
                         document.querySelector('#CachePartialResults').checked = config.CachePartialResults !== false;
                         document.querySelector('#PromoteCompletedSubtitles').checked = !!config.PromoteCompletedSubtitles;
                         document.querySelector('#PromotableModels').value = config.PromotableModels || 'large-v3, large-v3-turbo';
+                        updateCaptionPolishProviderSettings();
                         Dashboard.hideLoadingMsg();
                     });
                 });

@@ -286,6 +286,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.20.zip",
         "checksum": "e2f482eba754a63fbfbf553d54625c48",
         "timestamp": "2026-07-16T02:49:33Z"
+      },
+      {
+        "version": "0.4.21.0",
+        "changelog": "Group caption polish settings by provider",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.21.zip",
+        "checksum": "d0c0251bb3df3f1a8bc8181b47456b1b",
+        "timestamp": "2026-07-16T02:53:49Z"
       }
     ]
   }
