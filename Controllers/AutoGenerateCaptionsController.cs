@@ -204,9 +204,41 @@ public class AutoGenerateCaptionsController : ControllerBase
                 Name = i.Name ?? string.Empty,
                 Type = i.GetType().Name,
                 ParentIndexNumber = i.ParentIndexNumber,
-                IndexNumber = i.IndexNumber
+                IndexNumber = i.IndexNumber,
+                HasVttSidecar = HasVttSidecar(i)
             })
             .ToArray());
+    }
+
+    private static bool HasVttSidecar(BaseItem item)
+    {
+        if (item is not Video video || string.IsNullOrWhiteSpace(video.Path))
+        {
+            return false;
+        }
+
+        string? directory = Path.GetDirectoryName(video.Path);
+        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(video.Path);
+        if (string.IsNullOrWhiteSpace(directory)
+            || string.IsNullOrWhiteSpace(fileNameWithoutExtension)
+            || !Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        try
+        {
+            return Directory.EnumerateFiles(directory, fileNameWithoutExtension + "*")
+                .Any(path => Path.GetExtension(path).Equals(".vtt", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

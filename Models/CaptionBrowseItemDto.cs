@@ -19,4 +19,7 @@ public class CaptionBrowseItemDto
 
     /// <summary>Gets or sets the optional episode number.</summary>
     public int? IndexNumber { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether a WebVTT sidecar already exists beside this media file.</summary>
+    public bool HasVttSidecar { get; set; }
 }

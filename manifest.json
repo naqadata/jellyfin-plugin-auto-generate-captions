@@ -262,6 +262,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.17.zip",
         "checksum": "67f41ccbb0c0fba70bf86d387239b7ff",
         "timestamp": "2026-07-15T18:39:35Z"
+      },
+      {
+        "version": "0.4.18.0",
+        "changelog": "Show existing VTT sidecars in Enhanced queue browser",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.18.zip",
+        "checksum": "c2bcd7e09915f1843052335aec60968a",
+        "timestamp": "2026-07-16T02:45:48Z"
       }
     ]
   }
