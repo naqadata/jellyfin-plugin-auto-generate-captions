@@ -756,9 +756,19 @@
                 var url = ApiClient.getUrl('AutoGenerateCaptions/Admin/Queue/' + apiValue(item, 'id'), { overwriteExistingSubtitle: overwrite });
                 return ApiClient.ajax({ type: 'POST', url: url, dataType: 'json' }).then(function () {
                     loadCaptionQueue();
+                    return true;
                 }).catch(function (error) {
                     captionText(card, 'captionJobMessage captionError', error.message || error);
+                    return false;
                 });
+            }
+
+            function markCaptionItemQueued(queueButton) {
+                queueButton.textContent = 'Already Queued';
+                queueButton.disabled = true;
+                queueButton.title = 'This item already has active Enhanced queue work.';
+                queueButton.style.setProperty('opacity', '.7');
+                setDarkButton(queueButton, false);
             }
 
             function renderCaptionBreadcrumb(trail, terminalLabel) {
@@ -867,7 +877,13 @@
                         queueButton.addEventListener('click', function (event) {
                             event.stopPropagation();
                             queueButton.disabled = true;
-                            queueCaptionItem(item, card).finally(function () { queueButton.disabled = false; });
+                            queueCaptionItem(item, card).then(function (queued) {
+                                if (queued && itemType !== 'Series' && itemType !== 'Season') {
+                                    markCaptionItemQueued(queueButton);
+                                } else {
+                                    queueButton.disabled = false;
+                                }
+                            });
                         });
                     }
                     var actions = document.createElement('div');

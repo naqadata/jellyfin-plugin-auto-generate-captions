@@ -318,6 +318,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.24.zip",
         "checksum": "b9b49c5519a2b4e28b162e32a9d40406",
         "timestamp": "2026-07-16T03:01:52Z"
+      },
+      {
+        "version": "0.4.25.0",
+        "changelog": "Update queued episode buttons immediately",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.25.zip",
+        "checksum": "a729befa7b5c91bf727f48b3c0f255dc",
+        "timestamp": "2026-07-16T03:03:46Z"
       }
     ]
   }
