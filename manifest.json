@@ -302,6 +302,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.22.zip",
         "checksum": "26c0d7602d2dc63c3d16a23f4f602092",
         "timestamp": "2026-07-16T02:56:07Z"
+      },
+      {
+        "version": "0.4.23.0",
+        "changelog": "Release local polish models before background transcription",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.23.zip",
+        "checksum": "130be34cfaf8cba80a8114effc357d88",
+        "timestamp": "2026-07-16T02:59:13Z"
       }
     ]
   }

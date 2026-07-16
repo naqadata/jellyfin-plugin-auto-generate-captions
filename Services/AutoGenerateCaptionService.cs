@@ -870,6 +870,7 @@ public class AutoGenerateCaptionService
 
             state.ProcessingPhase = "transcribing";
             state.Message = "Submitting background transcription and diarization to the remote worker.";
+            await ReleaseLocalCaptionPolishModelsAsync(config, state.SessionId, state.Cancellation.Token).ConfigureAwait(false);
             bool completed = await _remoteCaptionWorkerClient.TryTranscribeAsync(
                 config,
                 state.SessionId,
@@ -2834,6 +2835,62 @@ public class AutoGenerateCaptionService
         return string.IsNullOrWhiteSpace(configured)
             ? isFull ? "qwen3:8b" : "qwen3:4b"
             : configured.Trim();
+    }
+
+    private async Task ReleaseLocalCaptionPolishModelsAsync(
+        PluginConfiguration config,
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(config.LocalCaptionPolishUrl, UriKind.Absolute, out Uri? configuredEndpoint))
+        {
+            return;
+        }
+
+        Uri unloadEndpoint = new UriBuilder(configuredEndpoint.Scheme, configuredEndpoint.Host, configuredEndpoint.Port, "/api/generate").Uri;
+        string[] models =
+        [
+            GetLocalCaptionPolishModel(config, isFull: false),
+            GetLocalCaptionPolishModel(config, isFull: true)
+        ];
+
+        foreach (string model in models.Distinct(StringComparer.Ordinal))
+        {
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                using var request = new HttpRequestMessage(HttpMethod.Post, unloadEndpoint);
+                if (!string.IsNullOrWhiteSpace(config.LocalCaptionPolishApiKey))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.LocalCaptionPolishApiKey.Trim());
+                }
+
+                request.Content = JsonContent.Create(new { model, keep_alive = 0 }, options: JsonOptions);
+                using HttpResponseMessage response = await _captionPolishHttpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation(
+                        "Auto-caption released local polish model before remote transcription: session={SessionId}; model={Model}; endpoint={Endpoint}",
+                        sessionId,
+                        model,
+                        unloadEndpoint);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Auto-caption could not release local polish model before remote transcription: session={SessionId}; model={Model}; endpoint={Endpoint}",
+                    sessionId,
+                    model,
+                    unloadEndpoint);
+            }
+        }
     }
 
     private async Task<string> SendLocalCaptionPolishAsync(
