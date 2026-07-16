@@ -49,7 +49,7 @@ public class EnhancedCaptionQueueService : BackgroundService
                 .OrderBy(i => i.Status == "running" ? 0 : i.Status == "polishing" ? 1 : i.Status == "pending-polish" ? 2 : 3)
                 .ThenBy(i => i.CreatedAt)
                 .Concat(_jobs
-                    .Where(i => i.Status is not "running" and not "polishing" and not "queued")
+                    .Where(i => i.Status is not "running" and not "polishing" and not "pending-polish" and not "queued")
                     .OrderByDescending(i => i.CompletedAt ?? i.CreatedAt))
                 .Take(Math.Clamp(limit, 1, 250))
                 .Select(Clone)
