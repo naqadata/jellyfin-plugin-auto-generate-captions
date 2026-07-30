@@ -28,7 +28,7 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 26;
+    private const int GenerationPipelineVersion = 27;
     // Keep the established OpenAI request shape independent from the smaller
     // local-model batches.  Larger batches noticeably reduce OpenAI's ability
     // to reflow cue boundaries coherently.
@@ -38,6 +38,7 @@ public class AutoGenerateCaptionService
     private static readonly Regex TimestampRegex = new(@"^(?<start>\d\d:\d\d:\d\d\.\d\d\d)\s+-->\s+(?<end>\d\d:\d\d:\d\d\.\d\d\d)", RegexOptions.Compiled);
     private static readonly Regex VoiceTagRegex = new(@"^<v\s+(?<speaker>[^>]+)>(?<text>.*)</v>$", RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex SpokenWordRegex = new(@"[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)?", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<Guid, CaptionSessionState> _sessions = new();
     private readonly ConcurrentDictionary<string, Guid> _prefetchByCacheKey = new(StringComparer.Ordinal);
@@ -2100,7 +2101,7 @@ public class AutoGenerateCaptionService
         }
 
         var output = new List<CaptionCue>();
-        long previousStartTicks = expected.StartTicks;
+        long previousEndTicks = expected.StartTicks;
         foreach ((OpenAiCaptionCue cue, int cueIndex) in returned.Cues
                      .OrderBy(i => i.StartMs)
                      .ThenBy(i => i.EndMs)
@@ -2115,7 +2116,7 @@ public class AutoGenerateCaptionService
                     $"OpenAI changed speaker in {expected.GroupId} cue {cueIndex}: expected='{expected.Speaker ?? "(unlabeled)"}'; returned='{cue.Speaker ?? "(unlabeled)"}'."));
             }
 
-            if (startTicks < expected.StartTicks || endTicks > expected.EndTicks || endTicks <= startTicks || startTicks < previousStartTicks)
+            if (startTicks < expected.StartTicks || endTicks > expected.EndTicks || endTicks <= startTicks || startTicks < previousEndTicks)
             {
                 throw new InvalidOperationException(string.Create(
                     CultureInfo.InvariantCulture,
@@ -2133,7 +2134,7 @@ public class AutoGenerateCaptionService
                     expected.Speaker));
             }
 
-            previousStartTicks = startTicks;
+            previousEndTicks = endTicks;
         }
 
         if (output.Count == 0)
@@ -2161,7 +2162,7 @@ public class AutoGenerateCaptionService
     {
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"Clean up the editable_groups of auto-generated subtitles. Each group is one immutable speaker run. Return every group_id exactly once and preserve its group speaker and every cue speaker exactly, including null. Never move words or timestamps between groups. Keep every returned cue inside that group's window_start_ms and window_end_ms. context_before and context_after are read-only context: use them to understand sentence flow, but never return or rewrite them. Within each group, keep wording faithful while improving punctuation, capitalization, and sentence flow. You may move words between neighboring cues, split cues, or merge cues only inside the same group. Prefer cue boundaries at sentence boundaries, clause boundaries, or natural speech pauses. Do not force an orphan fragment into another group; preserve it when the immutable speaker boundary prevents a safe repair. Hard rule: split cues longer than {maxCueWords} words into consecutive cues with roughly even word counts while preserving phrase boundaries. Do not add decorative punctuation or invent wording. Do not censor profanity. Preserve lyrics and repeated syllables. Return only the rewritten editable groups.");
+            $"Rewrite each editable_group of generated subtitles. A group is one immutable speaker run: return every group_id exactly once with its speaker unchanged, and keep every returned cue inside that group's window. Context is read-only. Preserve all spoken content, including profanity, lyrics, and repetitions. You may split, merge, or move words only within the same group to improve capitalization, punctuation, and readable phrase boundaries. Split cues longer than {maxCueWords} words into balanced consecutive cues where timing allows. Do not move words or timestamps between groups, invent wording, or introduce stylistic punctuation not warranted by speech. Return only rewritten editable groups.");
     }
 
     private async Task TryPolishBufferedCaptionsAsync(
@@ -2279,6 +2280,9 @@ public class AutoGenerateCaptionService
                 return;
             }
 
+            int changedCueCount = CountChangedCueText(cues, polished);
+            int inputWordCount = CountSpokenWords(cues);
+            int outputWordCount = CountSpokenWords(polished);
             lock (state.SyncRoot)
             {
                 MergeChunkCues(state.Cues, polished, polishStartTicks, polishEndTicks);
@@ -2291,11 +2295,14 @@ public class AutoGenerateCaptionService
             }
 
             _logger.LogInformation(
-                "Auto-caption OpenAI polish applied for session {SessionId}: model={Model}; inputCues={InputCueCount}; outputCues={OutputCueCount}; guardBandSeconds={GuardBandSeconds}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
+                "Auto-caption OpenAI live cue edit applied for session {SessionId}: model={Model}; inputCues={InputCueCount}; outputCues={OutputCueCount}; changedCues={ChangedCueCount}; inputWords={InputWordCount}; outputWords={OutputWordCount}; guardBandSeconds={GuardBandSeconds}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
                 state.SessionId,
                 GetOpenAiCaptionPolishModel(config),
                 cues.Count,
                 polished.Count,
+                changedCueCount,
+                inputWordCount,
+                outputWordCount,
                 guardBandSeconds,
                 polishStartTicks,
                 polishEndTicks);
@@ -2372,6 +2379,7 @@ public class AutoGenerateCaptionService
                                 }),
                                 editable_cues = cues.Select(i => new
                                 {
+                                    cue_id = i.Id,
                                     start_ms = TicksToMilliseconds(i.StartTicks),
                                     end_ms = TicksToMilliseconds(i.EndTicks),
                                     text = NormalizeCueText(i.Text),
@@ -2412,12 +2420,13 @@ public class AutoGenerateCaptionService
                                     additionalProperties = false,
                                     properties = new
                                     {
+                                        cue_id = new { type = "string" },
                                         start_ms = new { type = "integer" },
                                         end_ms = new { type = "integer" },
                                         text = new { type = "string" },
                                         speaker = new { type = new[] { "string", "null" } }
                                     },
-                                    required = new[] { "start_ms", "end_ms", "text", "speaker" }
+                                    required = new[] { "cue_id", "start_ms", "end_ms", "text", "speaker" }
                                 }
                             }
                         },
@@ -2435,7 +2444,14 @@ public class AutoGenerateCaptionService
                 window_start_ms = TicksToMilliseconds(windowStartTicks),
                 window_end_ms = TicksToMilliseconds(windowEndTicks),
                 context_before = contextBefore.Select(ToOpenAiCue),
-                editable_cues = cues.Select(ToOpenAiCue),
+                editable_cues = cues.Select(i => new
+                {
+                    cue_id = i.Id,
+                    start_ms = TicksToMilliseconds(i.StartTicks),
+                    end_ms = TicksToMilliseconds(i.EndTicks),
+                    text = NormalizeCueText(i.Text),
+                    speaker = i.Speaker
+                }),
                 context_after = contextAfter.Select(ToOpenAiCue)
             }, JsonOptions);
             string localOutputText = await SendLocalCaptionPolishAsync(
@@ -2452,7 +2468,7 @@ public class AutoGenerateCaptionService
                 throw new InvalidOperationException("Local caption polish returned no cues.");
             }
 
-            return ValidatePolishedCues(localParsed.Cues, cues, windowStartTicks, windowEndTicks);
+            return ValidateLivePolishedCues(localParsed.Cues, cues);
         }
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -2479,11 +2495,7 @@ public class AutoGenerateCaptionService
             throw new InvalidOperationException("OpenAI caption polish returned no cues.");
         }
 
-        IReadOnlyList<CaptionCue> polished = ValidatePolishedCues(
-            parsed.Cues,
-            cues,
-            windowStartTicks,
-            windowEndTicks);
+        IReadOnlyList<CaptionCue> polished = ValidateLivePolishedCues(parsed.Cues, cues);
         if (polished.Count > cues.Count * 3)
         {
             throw new InvalidOperationException(string.Create(
@@ -2505,34 +2517,13 @@ public class AutoGenerateCaptionService
     private static string BuildOpenAiCaptionPolishPrompt(int maxCueWords)
     {
         return $"""
-            Clean up the editable_cues in a future-safe group of auto-generated subtitles.
+            Edit the editable_cues as one continuous live transcript. Return every cue exactly once, preserving
+            cue_id, order, start_ms, end_ms, and speaker exactly. Context is read-only and may only be used to
+            determine sentence case and punctuation.
 
-            context_before and context_after are read-only context: use them to understand sentence flow,
-            but never return or rewrite them. Preserve every speaker value exactly, including null, and
-            never move words between cues with different speakers. Keep wording faithful.
-
-            Improve punctuation, capitalization, and sentence flow. You may move words between neighboring
-            editable cues with the same speaker, split editable cues, or merge editable cues with the same
-            speaker when it makes the sentence structure more coherent. Prefer cue boundaries at sentence
-            boundaries, clause boundaries, or natural speech pauses. Do not leave one- or two-word fragments
-            at the beginning or end of a cue when they grammatically belong to a neighboring cue. If a cue
-            begins with an orphaned conjunction, pronoun, article, preposition, or phrase that belongs to the
-            previous sentence, use the read-only context to punctuate it correctly without returning the
-            context cue. Prefer sentence-level cues when timing allows.
-
-            Hard rule: if a cue would contain more than {maxCueWords} words, split it into two or more
-            consecutive cues with roughly even word counts, preserving phrase boundaries and natural pauses.
-            Do not return cue text longer than {maxCueWords} words unless preserving short lyrics or repeated
-            syllables requires it. Adjust returned cue timestamps within the provided editable time range to
-            match natural cue boundaries; when splitting a long cue, divide its time range proportionally
-            across the new cues. Keep all returned cue timestamps inside the provided time range.
-
-            Do not add decorative punctuation. Do not invent colons, semicolons, or hyphens. Do not censor,
-            mask, euphemize, or soften profanity; keep explicit language uncensored when present, and restore
-            masked profanity such as s**t only when the uncensored word is clear from context. Preserve lyrics
-            and repeated syllables such as fa la la. Capitalize only true sentence starts and proper nouns.
-
-            Return only rewritten editable cues.
+            Change only capitalization and punctuation. Do not add, remove, move, merge, split, or reorder
+            spoken words. Preserve profanity, lyrics, and repetitions. Do not introduce stylistic punctuation
+            that is not warranted by the speech. Return only rewritten editable cues.
             """;
     }
 
@@ -2582,52 +2573,67 @@ public class AutoGenerateCaptionService
         return false;
     }
 
-    private static IReadOnlyList<CaptionCue> ValidatePolishedCues(
+    private static IReadOnlyList<CaptionCue> ValidateLivePolishedCues(
         IReadOnlyList<OpenAiCaptionCue> cues,
-        IReadOnlyList<CaptionCue> anchors,
-        long windowStartTicks,
-        long windowEndTicks)
+        IReadOnlyList<CaptionCue> anchors)
     {
-        var output = new List<CaptionCue>();
-        long previousStartTicks = windowStartTicks;
-        foreach (OpenAiCaptionCue cue in cues.OrderBy(i => i.StartMs).ThenBy(i => i.EndMs))
+        if (cues.Count != anchors.Count)
         {
-            string text = NormalizeCueText(cue.Text);
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                continue;
-            }
+            throw new InvalidOperationException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"OpenAI live caption edit returned a different cue count: input={anchors.Count}; output={cues.Count}."));
+        }
 
-            long startTicks = Math.Clamp(MillisecondsToTicks(cue.StartMs), windowStartTicks, windowEndTicks);
-            long endTicks = Math.Clamp(MillisecondsToTicks(cue.EndMs), windowStartTicks, windowEndTicks);
-            startTicks = Math.Max(startTicks, previousStartTicks);
-            if (endTicks <= startTicks)
-            {
-                continue;
-            }
-
-            string?[] overlappingSpeakers = anchors
-                .Where(i => i.EndTicks > startTicks && i.StartTicks < endTicks)
-                .Select(i => i.Speaker)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            if (overlappingSpeakers.Length != 1
-                || !string.Equals(overlappingSpeakers[0], cue.Speaker, StringComparison.Ordinal))
+        var returnedById = new Dictionary<string, OpenAiCaptionCue>(StringComparer.Ordinal);
+        foreach (OpenAiCaptionCue cue in cues)
+        {
+            if (string.IsNullOrWhiteSpace(cue.CueId) || !returnedById.TryAdd(cue.CueId, cue))
             {
                 throw new InvalidOperationException(
-                    "OpenAI caption polish changed or crossed a speaker boundary.");
+                    "OpenAI live caption edit omitted or duplicated a cue_id.");
+            }
+        }
+
+        var output = new List<CaptionCue>(anchors.Count);
+        foreach (CaptionCue anchor in anchors)
+        {
+            if (!returnedById.TryGetValue(anchor.Id, out OpenAiCaptionCue? cue)
+                || cue.StartMs != TicksToMilliseconds(anchor.StartTicks)
+                || cue.EndMs != TicksToMilliseconds(anchor.EndTicks)
+                || !string.Equals(cue.Speaker, anchor.Speaker, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "OpenAI live caption edit changed a cue identity, timestamp, or speaker.");
             }
 
-            output.Add(new CaptionCue(
-                string.Create(CultureInfo.InvariantCulture, $"openai-{output.Count:000000}"),
-                startTicks,
-                endTicks,
-                text,
-                cue.Speaker));
-            previousStartTicks = startTicks;
+            string text = NormalizeCueText(cue.Text);
+            if (string.IsNullOrWhiteSpace(text) || !HasSameSpokenWords(anchor.Text, text))
+            {
+                throw new InvalidOperationException(
+                    "OpenAI live caption edit changed spoken words.");
+            }
+
+            output.Add(anchor with { Text = text });
         }
 
         return output;
+    }
+
+    private static bool HasSameSpokenWords(string left, string right)
+    {
+        string[] leftWords = SpokenWordRegex.Matches(NormalizeCueText(left)).Select(i => i.Value).ToArray();
+        string[] rightWords = SpokenWordRegex.Matches(NormalizeCueText(right)).Select(i => i.Value).ToArray();
+        return leftWords.SequenceEqual(rightWords, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static int CountSpokenWords(IEnumerable<CaptionCue> cues)
+    {
+        return cues.Sum(i => SpokenWordRegex.Matches(NormalizeCueText(i.Text)).Count);
+    }
+
+    private static int CountChangedCueText(IReadOnlyList<CaptionCue> input, IReadOnlyList<CaptionCue> output)
+    {
+        return input.Zip(output, (source, edited) => !string.Equals(NormalizeCueText(source.Text), NormalizeCueText(edited.Text), StringComparison.Ordinal)).Count(i => i);
     }
 
     private static IReadOnlyList<CaptionCue> ShapePolishedCues(
@@ -3002,8 +3008,8 @@ public class AutoGenerateCaptionService
         {
             "caption-polish:on",
             GetCaptionPolishProvider(config),
-            "direct-openai-cues:v1",
-            "balanced-long-cues:v1",
+            "live-cue-editor:v1",
+            "full-speaker-reflow:v2",
             "read-only-context:v1",
             "speaker-preserving:v1",
             IsLocalCaptionPolish(config)
@@ -4152,5 +4158,6 @@ public class AutoGenerateCaptionService
         [property: JsonPropertyName("start_ms")] long StartMs,
         [property: JsonPropertyName("end_ms")] long EndMs,
         [property: JsonPropertyName("text")] string Text,
-        [property: JsonPropertyName("speaker")] string? Speaker);
+        [property: JsonPropertyName("speaker")] string? Speaker,
+        [property: JsonPropertyName("cue_id")] string? CueId = null);
 }

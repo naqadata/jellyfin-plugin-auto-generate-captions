@@ -334,6 +334,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.26.zip",
         "checksum": "fca558f490f3885f14db854f702e04ca",
         "timestamp": "2026-07-16T03:10:23Z"
+      },
+      {
+        "version": "0.4.27.0",
+        "changelog": "Harden live caption editing and simplify OpenAI polish prompts",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.27.zip",
+        "checksum": "fca58e4909aa79835ca68c0fea57ecf4",
+        "timestamp": "2026-07-30T04:40:44Z"
       }
     ]
   }
