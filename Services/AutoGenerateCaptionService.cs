@@ -1211,7 +1211,14 @@ public class AutoGenerateCaptionService
             RebuildCombinedCacheVtt(state, config, persistentCacheDirectory, transcription.Model);
         }
 
-        await TryPolishBufferedCaptionsAsync(state, config, persistentCacheDirectory, transcription.Model).ConfigureAwait(false);
+        int polishPassLimit = Math.Clamp(config.OpenAiLivePolishPassesPerChunk, 1, 4);
+        for (int polishPass = 0; polishPass < polishPassLimit; polishPass++)
+        {
+            if (!await TryPolishBufferedCaptionsAsync(state, config, persistentCacheDirectory, transcription.Model).ConfigureAwait(false))
+            {
+                break;
+            }
+        }
 
         state.Message = cues.Count > 0
             ? string.Create(CultureInfo.InvariantCulture, $"Generated {cues.Count} cues for chunk {chunkIndex}.")
@@ -2183,7 +2190,7 @@ public class AutoGenerateCaptionService
             $"Rewrite each editable_group of generated subtitles. A group is one immutable speaker run: return every group_id exactly once with its speaker unchanged, and keep every returned cue inside that group's window. Context is read-only. Preserve all spoken content, including profanity, lyrics, and repetitions. You may split, merge, or move words only within the same group to improve capitalization, punctuation, and readable phrase boundaries. Split cues longer than {maxCueWords} words into balanced consecutive cues where timing allows. Do not move words or timestamps between groups, invent wording, or introduce stylistic punctuation not warranted by speech. Return only rewritten editable groups.");
     }
 
-    private async Task TryPolishBufferedCaptionsAsync(
+    private async Task<bool> TryPolishBufferedCaptionsAsync(
         CaptionSessionState state,
         PluginConfiguration config,
         string? persistentCacheDirectory,
@@ -2206,7 +2213,7 @@ public class AutoGenerateCaptionService
 
         if (!state.EnableOpenAiPolish || !IsCaptionPolishConfigured(config) || !IsPromotableModel(config, model))
         {
-            return;
+            return false;
         }
 
         int requiredLookaheadSeconds = Math.Clamp(config.OpenAiPolishLookaheadSeconds, 15, 600);
@@ -2227,14 +2234,14 @@ public class AutoGenerateCaptionService
                     generatedThroughTicks - clientPositionTicks,
                     requiredLookaheadTicks);
             }
-            return;
+            return false;
         }
 
         long safeStartTicks = clientPositionTicks + TimeSpan.FromSeconds(guardBandSeconds).Ticks;
         long minimumStartTicks = Math.Max(safeStartTicks, state.LastOpenAiPolishedThroughTicks);
         if (generatedThroughTicks <= minimumStartTicks)
         {
-            return;
+            return false;
         }
 
         List<CaptionCue> cues;
@@ -2246,7 +2253,7 @@ public class AutoGenerateCaptionService
         {
             if (state.OpenAiPolishRunning)
             {
-                return;
+                return false;
             }
 
             cues = state.Cues
@@ -2264,7 +2271,7 @@ public class AutoGenerateCaptionService
                         state.SessionId,
                         cues.Count);
                 }
-                return;
+                return false;
             }
 
             polishStartTicks = cues[0].StartTicks;
@@ -2283,19 +2290,42 @@ public class AutoGenerateCaptionService
 
         try
         {
-            IReadOnlyList<CaptionCue> polished = await PolishCaptionsWithOpenAiAsync(
-                state.SessionId,
-                config,
-                cues,
-                contextBefore,
-                contextAfter,
-                polishStartTicks,
-                polishEndTicks,
-                state.Cancellation.Token).ConfigureAwait(false);
+            IReadOnlyList<CaptionCue> polished;
+            try
+            {
+                polished = await PolishCaptionsWithOpenAiAsync(
+                    state.SessionId,
+                    config,
+                    cues,
+                    contextBefore,
+                    contextAfter,
+                    polishStartTicks,
+                    polishEndTicks,
+                    state.Cancellation.Token).ConfigureAwait(false);
+            }
+            catch (LiveCaptionPolishValidationException ex)
+            {
+                _logger.LogInformation(
+                    ex,
+                    "Auto-caption OpenAI live polish validation retry for session {SessionId}: rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}",
+                    state.SessionId,
+                    polishStartTicks,
+                    polishEndTicks);
+                polished = await PolishCaptionsWithOpenAiAsync(
+                    state.SessionId,
+                    config,
+                    cues,
+                    contextBefore,
+                    contextAfter,
+                    polishStartTicks,
+                    polishEndTicks,
+                    state.Cancellation.Token,
+                    strictTokenRetry: true).ConfigureAwait(false);
+            }
 
             if (polished.Count == 0)
             {
-                return;
+                return false;
             }
 
             int changedCueCount = CountChangedCueText(cues, polished);
@@ -2324,6 +2354,7 @@ public class AutoGenerateCaptionService
                 guardBandSeconds,
                 polishStartTicks,
                 polishEndTicks);
+            return true;
         }
         catch (OperationCanceledException) when (state.Cancellation.IsCancellationRequested)
         {
@@ -2338,6 +2369,7 @@ public class AutoGenerateCaptionService
                 GetOpenAiCaptionPolishModel(config),
                 polishStartTicks,
                 polishEndTicks);
+            return false;
         }
         finally
         {
@@ -2356,9 +2388,11 @@ public class AutoGenerateCaptionService
         IReadOnlyList<CaptionCue> contextAfter,
         long windowStartTicks,
         long windowEndTicks,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool strictTokenRetry = false)
     {
         int maxCueWords = Math.Clamp(Math.Max(config.MaxCueWords, 12), 3, 40);
+        string prompt = BuildOpenAiCaptionPolishPrompt(maxCueWords, strictTokenRetry);
         var request = new
         {
             model = GetOpenAiCaptionPolishModel(config),
@@ -2372,7 +2406,7 @@ public class AutoGenerateCaptionService
                         new
                         {
                             type = "input_text",
-                            text = BuildOpenAiCaptionPolishPrompt(maxCueWords)
+                            text = prompt
                         }
                     }
                 },
@@ -2475,7 +2509,7 @@ public class AutoGenerateCaptionService
             string localOutputText = await SendLocalCaptionPolishAsync(
                 config,
                 GetLocalCaptionPolishModel(config, isFull: false),
-                BuildOpenAiCaptionPolishPrompt(maxCueWords),
+                prompt,
                 localInputJson,
                 request.text.format.schema,
                 "caption_polish",
@@ -2532,8 +2566,11 @@ public class AutoGenerateCaptionService
         return polished;
     }
 
-    private static string BuildOpenAiCaptionPolishPrompt(int maxCueWords)
+    private static string BuildOpenAiCaptionPolishPrompt(int maxCueWords, bool strictTokenRetry = false)
     {
+        string retryInstruction = strictTokenRetry
+            ? "This is a validation retry. Before returning, verify that every cue retains its exact sequence of spoken word tokens; only letter case and punctuation characters may differ."
+            : "Before returning, verify that every cue retains its exact sequence of spoken word tokens.";
         return $"""
             Edit the editable_cues as one continuous live transcript. Return every cue exactly once, preserving
             cue_id, order, start_ms, end_ms, and speaker exactly. Context is read-only and may only be used to
@@ -2541,7 +2578,7 @@ public class AutoGenerateCaptionService
 
             Change only capitalization and punctuation. Do not add, remove, move, merge, split, or reorder
             spoken words. Preserve profanity, lyrics, and repetitions. Do not introduce stylistic punctuation
-            that is not warranted by the speech. Return only rewritten editable cues.
+            that is not warranted by the speech. {retryInstruction} Return only rewritten editable cues.
             """;
     }
 
@@ -2627,7 +2664,7 @@ public class AutoGenerateCaptionService
             string text = NormalizeCueText(cue.Text);
             if (string.IsNullOrWhiteSpace(text) || !HasSameSpokenWords(anchor.Text, text))
             {
-                throw new InvalidOperationException(
+                throw new LiveCaptionPolishValidationException(
                     "OpenAI live caption edit changed spoken words.");
             }
 
@@ -2635,6 +2672,14 @@ public class AutoGenerateCaptionService
         }
 
         return output;
+    }
+
+    private sealed class LiveCaptionPolishValidationException : InvalidOperationException
+    {
+        public LiveCaptionPolishValidationException(string message)
+            : base(message)
+        {
+        }
     }
 
     private static bool HasSameSpokenWords(string left, string right)

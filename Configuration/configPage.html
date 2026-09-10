@@ -275,6 +275,11 @@
                         <input id="OpenAiPolishCueCount" name="OpenAiPolishCueCount" type="number" is="emby-input" min="2" max="80" />
                         <div class="fieldDescription">Target number of future-safe cues to send in one polishing pass.</div>
                     </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="OpenAiLivePolishPassesPerChunk">Live polish passes per chunk</label>
+                        <input id="OpenAiLivePolishPassesPerChunk" name="OpenAiLivePolishPassesPerChunk" type="number" is="emby-input" min="1" max="4" />
+                        <div class="fieldDescription">Bounded consecutive polishing windows after each Live chunk, so safe generated-ahead captions do not fall behind.</div>
+                    </div>
                     </section>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="PollSeconds">Client poll seconds</label>
@@ -1006,6 +1011,7 @@
                         document.querySelector('#OpenAiPolishWindowSeconds').value = config.OpenAiPolishWindowSeconds || 180;
                         document.querySelector('#OpenAiPolishGuardBandSeconds').value = configValue(config, 'OpenAiPolishGuardBandSeconds', 10);
                         document.querySelector('#OpenAiPolishCueCount').value = configValue(config, 'OpenAiPolishCueCount', 16);
+                        document.querySelector('#OpenAiLivePolishPassesPerChunk').value = configValue(config, 'OpenAiLivePolishPassesPerChunk', 3);
                         document.querySelector('#PollSeconds').value = config.PollSeconds || 2;
                         document.querySelector('#MaxConcurrentSessions').value = config.MaxConcurrentSessions || 1;
                         document.querySelector('#VadThreshold').value = configValue(config, 'VadThreshold', 0.35);
@@ -1074,6 +1080,7 @@
                         config.OpenAiPolishWindowSeconds = numberValue('#OpenAiPolishWindowSeconds', '180');
                         config.OpenAiPolishGuardBandSeconds = numberValue('#OpenAiPolishGuardBandSeconds', '10');
                         config.OpenAiPolishCueCount = numberValue('#OpenAiPolishCueCount', '16');
+                        config.OpenAiLivePolishPassesPerChunk = numberValue('#OpenAiLivePolishPassesPerChunk', '3');
                         config.PollSeconds = numberValue('#PollSeconds', '2');
                         config.MaxConcurrentSessions = numberValue('#MaxConcurrentSessions', '1');
                         config.VadThreshold = decimalValue('#VadThreshold', '0.35');

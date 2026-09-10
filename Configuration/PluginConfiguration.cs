@@ -203,6 +203,11 @@ public class PluginConfiguration : BasePluginConfiguration
     public int OpenAiPolishCueCount { get; set; } = 16;
 
     /// <summary>
+    /// Gets or sets the maximum number of bounded Live polish passes attempted after each generated chunk.
+    /// </summary>
+    public int OpenAiLivePolishPassesPerChunk { get; set; } = 3;
+
+    /// <summary>
     /// Gets or sets the Roku/client polling interval in seconds.
     /// </summary>
     public int PollSeconds { get; set; } = 2;
