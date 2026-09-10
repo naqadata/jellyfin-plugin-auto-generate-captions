@@ -359,6 +359,19 @@ public class AutoGenerateCaptionsController : ControllerBase
     }
 
     /// <summary>
+    /// Records the current client playback position for a live caption session.
+    /// </summary>
+    /// <param name="sessionId">Caption session id.</param>
+    /// <param name="positionTicks">Current client playback position in ticks.</param>
+    /// <returns>Current caption session status.</returns>
+    [HttpPost("Sessions/{sessionId}/Position")]
+    public ActionResult<CaptionSessionStatusDto> ReportPosition(Guid sessionId, [FromQuery] long positionTicks)
+    {
+        CaptionSessionStatusDto? status = _captionService.ReportClientPosition(sessionId, positionTicks);
+        return status is null ? NotFound() : status;
+    }
+
+    /// <summary>
     /// Stops a caption session.
     /// </summary>
     /// <param name="sessionId">Caption session id.</param>

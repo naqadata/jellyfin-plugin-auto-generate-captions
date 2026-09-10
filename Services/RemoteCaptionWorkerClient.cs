@@ -103,7 +103,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
                 JsonSerializer.Serialize(result.DiarizationTurns, new JsonSerializerOptions { WriteIndented = true }));
         }
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Auto-caption remote worker complete for session {SessionId}: worker={WorkerUrl}; jobId={JobId}; model={Model}; language={Language}; segments={SegmentCount}; vttBytes={VttBytes}; metadataEnableRegrouping={MetadataEnableRegrouping}; metadataMaxCueCharacters={MetadataMaxCueCharacters}; metadataMaxCueWords={MetadataMaxCueWords}; metadataMaxCueDurationSeconds={MetadataMaxCueDurationSeconds}",
             sessionId,
             baseUri,
@@ -245,7 +245,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             form.Add(new StringContent(diarize ? "true" : "false"), "diarize");
             form.Add(new StringContent(Math.Clamp(sliceSeconds, 0, 1800).ToString(CultureInfo.InvariantCulture)), "slice_seconds");
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Auto-caption remote worker submit for session {SessionId}: worker={WorkerUrl}; priority={Priority}; model={Model}; language={Language}; diarize={Diarize}; sliceSeconds={SliceSeconds}; initialPromptChars={InitialPromptChars}; enableRegrouping={EnableRegrouping}; regroupSplitGapSeconds={RegroupSplitGapSeconds}; maxCueCharacters={MaxCueCharacters}; maxCueWords={MaxCueWords}; maxCueDurationSeconds={MaxCueDurationSeconds}",
                 sessionId,
                 baseUri,
@@ -277,7 +277,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
             }
 
             RemoteJobResponse? job = await response.Content.ReadFromJsonAsync<RemoteJobResponse>(JsonOptions, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Auto-caption remote worker job submitted for session {SessionId}: worker={WorkerUrl}; jobId={JobId}; model={Model}",
                 sessionId,
                 baseUri,

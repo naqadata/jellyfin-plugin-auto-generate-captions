@@ -342,6 +342,14 @@
         "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.27.zip",
         "checksum": "fca58e4909aa79835ca68c0fea57ecf4",
         "timestamp": "2026-07-30T04:40:44Z"
+      },
+      {
+        "version": "0.4.28.0",
+        "changelog": "Fix tvOS live caption refresh without reinjecting subtitle tracks",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/naqadata/jellyfin-plugin-auto-generate-captions/main/dist/Jellyfin.Plugin.AutoGenerateCaptions_0.4.28.zip",
+        "checksum": "0fa9e96334784c406064d7bd035dd629",
+        "timestamp": "2026-07-30T04:57:47Z"
       }
     ]
   }

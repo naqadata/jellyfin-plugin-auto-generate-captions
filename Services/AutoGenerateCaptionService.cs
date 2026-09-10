@@ -333,6 +333,23 @@ public class AutoGenerateCaptionService
     }
 
     /// <summary>
+    /// Records the current client playback position without forcing the client to reload its subtitle track.
+    /// </summary>
+    /// <param name="sessionId">Session id.</param>
+    /// <param name="positionTicks">Current playback position in ticks.</param>
+    /// <returns>Status, or null when not found.</returns>
+    public CaptionSessionStatusDto? ReportClientPosition(Guid sessionId, long positionTicks)
+    {
+        if (!_sessions.TryGetValue(sessionId, out CaptionSessionState? state))
+        {
+            return null;
+        }
+
+        state.LastClientPositionTicks = Math.Max(0, positionTicks);
+        return ToStatusDto(state);
+    }
+
+    /// <summary>
     /// Gets active and recent work for the administrative processing view.
     /// </summary>
     /// <param name="limit">Maximum number of sessions to include.</param>
@@ -1129,7 +1146,7 @@ public class AutoGenerateCaptionService
         string? persistentCacheDirectory)
     {
         state.Message = string.Create(CultureInfo.InvariantCulture, $"Extracting caption chunk {chunkIndex}.");
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Auto-caption chunk start for session {SessionId}: chunkIndex={ChunkIndex}; startSeconds={StartSeconds}; chunkSeconds={ChunkSeconds}; clientPositionTicks={ClientPositionTicks}; generatedThroughTicks={GeneratedThroughTicks}",
             state.SessionId,
             chunkIndex,
@@ -1175,7 +1192,8 @@ public class AutoGenerateCaptionService
             extractStartSeconds,
             initialPrompt,
             "live",
-            diarize: false,
+            // Cortana runs the diarization model; request speaker turns for rolling live chunks too.
+            diarize: true,
             sliceSeconds: 0).ConfigureAwait(false);
 
         if (state.Cancellation.IsCancellationRequested)
@@ -1201,7 +1219,7 @@ public class AutoGenerateCaptionService
 
         stopwatch.Stop();
         double realtimeFactor = chunkSeconds > 0 ? chunkSeconds / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds) : 0;
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Auto-caption chunk complete for session {SessionId}: chunkIndex={ChunkIndex}; cues={CueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; extractStartSeconds={ExtractStartSeconds}; extractDurationSeconds={ExtractDurationSeconds}; replacementStartTicks={ReplacementStartTicks}; generatedThroughTicks={GeneratedThroughTicks}; elapsedMs={ElapsedMs}; realtimeFactor={RealtimeFactor}; vtt={VttPath}",
             state.SessionId,
             chunkIndex,
@@ -1235,7 +1253,7 @@ public class AutoGenerateCaptionService
         CacheFileRange? cachedRange = FindCachedRange(persistentCacheDirectory, startTicks, endTicks);
         if (cachedRange is null)
         {
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Auto-caption cache miss for session {SessionId}: chunkIndex={ChunkIndex}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; cacheDirectory={CacheDirectory}",
                 state.SessionId,
                 chunkIndex,
@@ -1268,7 +1286,7 @@ public class AutoGenerateCaptionService
             stopwatch.Stop();
             double chunkSeconds = TicksToSeconds(endTicks - startTicks);
             double realtimeFactor = chunkSeconds > 0 ? chunkSeconds / Math.Max(0.001, stopwatch.Elapsed.TotalSeconds) : 0;
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Auto-caption cache hit for session {SessionId}: chunkIndex={ChunkIndex}; cues={CueCount}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; generatedThroughTicks={GeneratedThroughTicks}; elapsedMs={ElapsedMs}; realtimeFactor={RealtimeFactor}; cachePath={CachePath}",
                 state.SessionId,
                 chunkIndex,
@@ -1483,7 +1501,7 @@ public class AutoGenerateCaptionService
         string cachePath = GetCachedVttPath(persistentCacheDirectory, startTicks, endTicks);
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
         WriteVtt(cachePath, cues);
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Auto-caption cache write for session {SessionId}: chunkIndex={ChunkIndex}; rangeStartTicks={RangeStartTicks}; rangeEndTicks={RangeEndTicks}; cachePath={CachePath}; bytes={Bytes}",
             state.SessionId,
             chunkIndex,
@@ -3630,7 +3648,7 @@ public class AutoGenerateCaptionService
         {
             foreach (string line in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                _logger.LogInformation("Auto-caption {ProcessName} stdout for session {SessionId}: {Line}", name, sessionId, line);
+                _logger.LogDebug("Auto-caption {ProcessName} stdout for session {SessionId}: {Line}", name, sessionId, line);
             }
         }
 

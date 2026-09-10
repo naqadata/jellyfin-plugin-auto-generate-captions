@@ -189,7 +189,7 @@ public sealed class ResidentWhisperWorker : IHostedService, IDisposable
         {
             if (!string.IsNullOrWhiteSpace(e.Data))
             {
-                _logger.LogInformation("Auto-caption resident worker log: {Line}", e.Data);
+                _logger.LogDebug("Auto-caption resident worker log: {Line}", e.Data);
             }
         };
         process.Exited += (_, _) =>
