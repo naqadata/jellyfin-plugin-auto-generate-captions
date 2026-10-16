@@ -28,7 +28,10 @@ namespace Jellyfin.Plugin.AutoGenerateCaptions.Services;
 public class AutoGenerateCaptionService
 {
     private const long TicksPerSecond = 10_000_000;
-    private const int GenerationPipelineVersion = 27;
+    // Live chunks intentionally skip diarization.  The worker defers speaker
+    // analysis until its live queue is idle, which makes concurrent rolling
+    // chunks wait on one another and prevents any live VTT from being emitted.
+    private const int GenerationPipelineVersion = 28;
     // Keep the established OpenAI request shape independent from the smaller
     // local-model batches.  Larger batches noticeably reduce OpenAI's ability
     // to reflow cue boundaries coherently.
@@ -1192,8 +1195,9 @@ public class AutoGenerateCaptionService
             extractStartSeconds,
             initialPrompt,
             "live",
-            // Cortana runs the diarization model; request speaker turns for rolling live chunks too.
-            diarize: true,
+            // Keep live captions latency-first.  Speaker diarization remains
+            // enabled for the full/background-caption path.
+            diarize: false,
             sliceSeconds: 0).ConfigureAwait(false);
 
         if (state.Cancellation.IsCancellationRequested)
