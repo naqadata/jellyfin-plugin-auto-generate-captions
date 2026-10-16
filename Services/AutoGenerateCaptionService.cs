@@ -892,6 +892,10 @@ public class AutoGenerateCaptionService
             state.ProcessingPhase = "transcribing";
             state.Message = "Submitting background transcription and diarization to the remote worker.";
             await ReleaseLocalCaptionPolishModelsAsync(config, state.SessionId, state.Cancellation.Token).ConfigureAwait(false);
+            TimeSpan remoteJobTimeout = TimeSpan.FromSeconds(Math.Clamp(
+                Math.Max(config.RemoteWorkerJobTimeoutSeconds, TicksToSeconds(durationTicks) * 0.5),
+                30,
+                7200));
             bool completed = await _remoteCaptionWorkerClient.TryTranscribeAsync(
                 config,
                 state.SessionId,
@@ -903,6 +907,7 @@ public class AutoGenerateCaptionService
                 initialPrompt: null,
                 diarize: config.EnableBackgroundDiarization,
                 sliceSeconds: Math.Clamp(config.BackgroundSliceSeconds, 60, 1800),
+                jobTimeout: remoteJobTimeout,
                 progress: progress => state.ProgressPercent = Math.Clamp(5 + (int)Math.Round(progress * 90), 5, 95),
                 jobUpdate: (jobId, workerState, workerProgress) =>
                 {
@@ -3224,6 +3229,7 @@ public class AutoGenerateCaptionService
                 initialPrompt,
                 diarize,
                 sliceSeconds,
+                jobTimeout: null,
                 progress: null,
                 jobUpdate: (jobId, workerState, _) =>
                 {

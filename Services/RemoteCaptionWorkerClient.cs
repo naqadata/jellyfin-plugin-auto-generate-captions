@@ -44,6 +44,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
     /// <param name="initialPrompt">Optional transcript context from the preceding live window.</param>
     /// <param name="diarize">Whether to perform speaker diarization.</param>
     /// <param name="sliceSeconds">Background transcription slice size, or zero for one pass.</param>
+    /// <param name="jobTimeout">Optional overall timeout for the submitted remote job.</param>
     /// <param name="progress">Optional callback receiving worker progress from zero through one.</param>
     /// <param name="jobUpdate">Optional callback receiving the worker job id, state, and progress.</param>
     /// <param name="diarizationDiagnosticsPath">Optional durable path for raw diarization turns.</param>
@@ -60,6 +61,7 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         string? initialPrompt,
         bool diarize,
         int sliceSeconds,
+        TimeSpan? jobTimeout,
         Action<double>? progress,
         Action<string, string, double>? jobUpdate,
         string? diarizationDiagnosticsPath,
@@ -92,7 +94,16 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
 
         jobUpdate?.Invoke(job.JobId, job.State, Math.Clamp(job.Progress, 0.0, 1.0));
 
-        RemoteJobResponse completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, progress, jobUpdate, cancellationToken).ConfigureAwait(false);
+        RemoteJobResponse completedJob;
+        try
+        {
+            completedJob = await WaitForJobAsync(baseUri, config, sessionId, job.JobId, jobTimeout, progress, jobUpdate, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await DeleteJobAsync(baseUri, config, job.JobId, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
         RemoteTranscriptResult result = await GetResultAsync(baseUri, config, sessionId, completedJob.JobId, cancellationToken).ConfigureAwait(false);
         WriteVtt(vttPath, result.Segments, offsetSeconds);
         if (!string.IsNullOrWhiteSpace(diarizationDiagnosticsPath) && result.DiarizationTurns is not null)
@@ -301,38 +312,49 @@ public sealed class RemoteCaptionWorkerClient : IDisposable
         PluginConfiguration config,
         Guid sessionId,
         string jobId,
+        TimeSpan? jobTimeout,
         Action<double>? progress,
         Action<string, string, double>? jobUpdate,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(config.RemoteWorkerJobTimeoutSeconds, 30, 7200)));
+        TimeSpan effectiveTimeout = jobTimeout ?? TimeSpan.FromSeconds(Math.Clamp(config.RemoteWorkerJobTimeoutSeconds, 30, 7200));
+        timeout.CancelAfter(effectiveTimeout);
         TimeSpan pollDelay = TimeSpan.FromSeconds(Math.Clamp(config.RemoteWorkerPollSeconds, 1, 15));
 
-        while (true)
+        try
         {
-            using HttpRequestMessage request = CreateRequest(HttpMethod.Get, new Uri(baseUri, string.Create(CultureInfo.InvariantCulture, $"v1/jobs/{jobId}")), config);
-            using HttpResponseMessage response = await _httpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            RemoteJobResponse job = await response.Content.ReadFromJsonAsync<RemoteJobResponse>(JsonOptions, timeout.Token).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("Remote caption worker returned an empty job response.");
-            progress?.Invoke(Math.Clamp(job.Progress, 0.0, 1.0));
-            jobUpdate?.Invoke(job.JobId, job.State, Math.Clamp(job.Progress, 0.0, 1.0));
-
-            if (string.Equals(job.State, "succeeded", StringComparison.OrdinalIgnoreCase))
+            while (true)
             {
-                return job;
-            }
+                using HttpRequestMessage request = CreateRequest(HttpMethod.Get, new Uri(baseUri, string.Create(CultureInfo.InvariantCulture, $"v1/jobs/{jobId}")), config);
+                using HttpResponseMessage response = await _httpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                RemoteJobResponse job = await response.Content.ReadFromJsonAsync<RemoteJobResponse>(JsonOptions, timeout.Token).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Remote caption worker returned an empty job response.");
+                progress?.Invoke(Math.Clamp(job.Progress, 0.0, 1.0));
+                jobUpdate?.Invoke(job.JobId, job.State, Math.Clamp(job.Progress, 0.0, 1.0));
 
-            if (string.Equals(job.State, "failed", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(job.State, "cancelled", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"Remote caption worker job {jobId} ended with state {job.State}: {job.Error}"));
-            }
+                if (string.Equals(job.State, "succeeded", StringComparison.OrdinalIgnoreCase))
+                {
+                    return job;
+                }
 
-            await Task.Delay(pollDelay, timeout.Token).ConfigureAwait(false);
+                if (string.Equals(job.State, "failed", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(job.State, "cancelled", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Remote caption worker job {jobId} ended with state {job.State}: {job.Error}"));
+                }
+
+                await Task.Delay(pollDelay, timeout.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Remote caption worker job {jobId} exceeded its {effectiveTimeout.TotalSeconds:0}-second timeout."));
         }
     }
 
